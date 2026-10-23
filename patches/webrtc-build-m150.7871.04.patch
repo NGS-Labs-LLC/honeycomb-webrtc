@@ -1,0 +1,140 @@
+honeycomb-webrtc patch to webrtc-build m150.7871.04 (717ec1d), D82.
+
+build/apple/xcframework.sh builds 11 slices (iOS, simulator x64, macOS, Catalyst, tvOS,
+visionOS). This keeps the two the app ships and tests on, iOS arm64 device and iOS arm64
+simulator, with their dSYMs, and writes a normalised zip (fixed times, sorted entries, no extra
+attributes) so two builds of the same input can be compared byte for byte, with the
+xcframework's Info.plist listing its slices in a fixed order. GN arguments are
+upstream's, unchanged.
+
+build.sh checks every file in UPSTREAM.sha256 before applying this with `patch -p1` in
+the webrtc-build checkout. The other files listed there are used unpatched; they are checked so
+a different upstream cannot slip in under the same pin. Re-derive on every webrtc-build upgrade.
+
+--- a/build/apple/xcframework.sh
++++ b/build/apple/xcframework.sh
+@@ -62,18 +62,10 @@
+       treat_warnings_as_errors = true
+       use_rtti = true"
+ 
++# honeycomb (D82): only the slices the app ships and tests on.
+ PLATFORMS=(
+   "iOS-arm64-device:target_os=\"ios\" target_environment=\"device\" target_cpu=\"arm64\" ios_deployment_target=\"13.0\""
+   "iOS-arm64-simulator:target_os=\"ios\" target_environment=\"simulator\" target_cpu=\"arm64\" ios_deployment_target=\"13.0\""
+-  "iOS-x64-simulator:target_os=\"ios\" target_environment=\"simulator\" target_cpu=\"x64\" ios_deployment_target=\"13.0\""
+-  "macOS-arm64:target_os=\"mac\" target_cpu=\"arm64\" mac_deployment_target=\"10.15\""
+-  "macOS-x64:target_os=\"mac\" target_cpu=\"x64\" mac_deployment_target=\"10.15\""
+-  "catalyst-arm64:target_os=\"ios\" target_environment=\"catalyst\" target_cpu=\"arm64\" ios_deployment_target=\"14.0\""
+-  "catalyst-x64:target_os=\"ios\" target_environment=\"catalyst\" target_cpu=\"x64\" ios_deployment_target=\"14.0\""
+-  "tvOS-arm64-device:target_os=\"ios\" target_environment=\"appletv\" target_cpu=\"arm64\" ios_deployment_target=\"17.0\""
+-  "tvOS-arm64-simulator:target_os=\"ios\" target_environment=\"appletvsimulator\" target_cpu=\"arm64\" ios_deployment_target=\"17.0\""
+-  "xrOS-arm64-device:target_os=\"ios\" target_environment=\"xrdevice\" target_cpu=\"arm64\" ios_deployment_target=\"26.0\""
+-  "xrOS-arm64-simulator:target_os=\"ios\" target_environment=\"xrsimulator\" target_cpu=\"arm64\" ios_deployment_target=\"26.0\""
+ )
+ 
+ cd "$SOURCE_DIR"
+@@ -98,39 +90,17 @@
+   end_group
+ done
+ 
+-start_group "Creating universal binaries (x64 + arm64)"
++start_group "Collecting slices"
+ 
+-mkdir -p "$OUT_DIR/macOS-lib"
+-cp -R "$OUT_DIR/macOS-x64/$FRAMEWORK_NAME.framework" "$OUT_DIR/macOS-lib/$FRAMEWORK_NAME.framework"
+-lipo -create -output "$OUT_DIR/macOS-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/macOS-arm64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/macOS-x64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME"
+-if [ -d "$OUT_DIR/macOS-x64/$FRAMEWORK_NAME.dSYM" ]; then
+-  cp -R "$OUT_DIR/macOS-x64/$FRAMEWORK_NAME.dSYM" "$OUT_DIR/macOS-lib/$FRAMEWORK_NAME.dSYM"
+-  lipo -create -output "$OUT_DIR/macOS-lib/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/macOS-arm64/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/macOS-x64/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME"
+-fi
+-
+-mkdir -p "$OUT_DIR/catalyst-lib"
+-cp -R "$OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.framework" "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.framework"
+-lipo -create -output "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/catalyst-x64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME"
+-if [ -d "$OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.dSYM" ]; then
+-  cp -R "$OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.dSYM" "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.dSYM"
+-  lipo -create -output "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/catalyst-x64/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME"
+-fi
+-
+-mkdir -p "$OUT_DIR/iOS-device-lib"
+-cp -R "$OUT_DIR/iOS-arm64-device/$FRAMEWORK_NAME.framework" "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.framework"
+-lipo -create -output "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/iOS-arm64-device/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME"
+-if [ -d "$OUT_DIR/iOS-arm64-device/$FRAMEWORK_NAME.dSYM" ]; then
+-  cp -R "$OUT_DIR/iOS-arm64-device/$FRAMEWORK_NAME.dSYM" "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.dSYM"
+-  lipo -create -output "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/iOS-arm64-device/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME"
+-fi
+-
+-mkdir -p "$OUT_DIR/iOS-simulator-lib"
+-cp -R "$OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.framework" "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.framework"
+-lipo -create -output "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/iOS-x64-simulator/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME"
+-if [ -d "$OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.dSYM" ]; then
+-  cp -R "$OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.dSYM" "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.dSYM"
+-  lipo -create -output "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/iOS-x64-simulator/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME"
+-fi
++for slice in iOS-device-lib:iOS-arm64-device iOS-simulator-lib:iOS-arm64-simulator; do
++  lib="${slice%%:*}"
++  src="${slice#*:}"
++  mkdir -p "$OUT_DIR/$lib"
++  cp -R "$OUT_DIR/$src/$FRAMEWORK_NAME.framework" "$OUT_DIR/$lib/$FRAMEWORK_NAME.framework"
++  if [ -d "$OUT_DIR/$src/$FRAMEWORK_NAME.dSYM" ]; then
++    cp -R "$OUT_DIR/$src/$FRAMEWORK_NAME.dSYM" "$OUT_DIR/$lib/$FRAMEWORK_NAME.dSYM"
++  fi
++done
+ 
+ end_group
+ 
+@@ -141,23 +111,11 @@
+ FRAMEWORK_PATHS=(
+   "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.framework"
+   "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.framework"
+-  "$OUT_DIR/macOS-lib/$FRAMEWORK_NAME.framework"
+-  "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.framework"
+-  "$OUT_DIR/tvOS-arm64-device/$FRAMEWORK_NAME.framework"
+-  "$OUT_DIR/tvOS-arm64-simulator/$FRAMEWORK_NAME.framework"
+-  "$OUT_DIR/xrOS-arm64-device/$FRAMEWORK_NAME.framework"
+-  "$OUT_DIR/xrOS-arm64-simulator/$FRAMEWORK_NAME.framework"
+ )
+ 
+ DSYM_PATHS=(
+   "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.dSYM"
+   "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.dSYM"
+-  "$OUT_DIR/macOS-lib/$FRAMEWORK_NAME.dSYM"
+-  "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.dSYM"
+-  "$OUT_DIR/tvOS-arm64-device/$FRAMEWORK_NAME.dSYM"
+-  "$OUT_DIR/tvOS-arm64-simulator/$FRAMEWORK_NAME.dSYM"
+-  "$OUT_DIR/xrOS-arm64-device/$FRAMEWORK_NAME.dSYM"
+-  "$OUT_DIR/xrOS-arm64-simulator/$FRAMEWORK_NAME.dSYM"
+ )
+ 
+ for i in "${!FRAMEWORK_PATHS[@]}"; do
+@@ -186,16 +144,21 @@
+ 
+ cp LICENSE "$OUT_DIR/$FRAMEWORK_NAME.xcframework/"
+ 
+-cd "$OUT_DIR/$FRAMEWORK_NAME.xcframework/macos-arm64_x86_64/$FRAMEWORK_NAME.framework/"
+-mv "$FRAMEWORK_NAME" "Versions/A/$FRAMEWORK_NAME"
+-ln -s "Versions/Current/$FRAMEWORK_NAME" "$FRAMEWORK_NAME"
+-
+-cd "$OUT_DIR/$FRAMEWORK_NAME.xcframework/ios-arm64_x86_64-maccatalyst/$FRAMEWORK_NAME.framework/"
+-mv "$FRAMEWORK_NAME" "Versions/A/$FRAMEWORK_NAME"
+-ln -s "Versions/Current/$FRAMEWORK_NAME" "$FRAMEWORK_NAME"
+-
++# honeycomb (D82): a normalised zip (fixed times, sorted entries, no extra attributes), so two
++# builds of the same input can be compared byte for byte. xcodebuild -create-xcframework lists the
++# slices in Info.plist in no fixed order, so they are sorted by identifier first.
+ cd "$OUT_DIR"
+-zip --symlinks -9 -r "$FRAMEWORK_NAME.xcframework.zip" "$FRAMEWORK_NAME.xcframework"
++python3 - "$FRAMEWORK_NAME.xcframework/Info.plist" <<'PLIST'
++import plistlib, sys
++path = sys.argv[1]
++with open(path, "rb") as f:
++    info = plistlib.load(f)
++info["AvailableLibraries"].sort(key=lambda library: library["LibraryIdentifier"])
++with open(path, "wb") as f:
++    plistlib.dump(info, f, fmt=plistlib.FMT_XML, sort_keys=True)
++PLIST
++find "$FRAMEWORK_NAME.xcframework" -exec touch -h -t 200001010000 {} +
++find "$FRAMEWORK_NAME.xcframework" | LC_ALL=C sort | zip --symlinks -X -9 "$FRAMEWORK_NAME.xcframework.zip" -@
+ 
+ end_group
+ 
