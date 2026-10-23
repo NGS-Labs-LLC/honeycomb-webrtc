@@ -9,6 +9,29 @@ prefixed `LKRTC` and built for iOS arm64 devices and the arm64 simulator. The ap
 and LiveKit's Swift SDK share it. The design is honeycomb-ios `docs/design/AES-256-FRAMES.md`
 (D82).
 
+## Upstream
+
+| | Commit |
+|---|---|
+| WebRTC source | [webrtc-sdk/webrtc](https://github.com/webrtc-sdk/webrtc) `a545de45259b47dfac5f3635863e47cb601f1bb2` (`m150_release`, 2026-10-22) |
+| Build scripts | [webrtc-sdk/webrtc-build](https://github.com/webrtc-sdk/webrtc-build) `717ec1dc5a94389d691e09cccaf3d7b3364fb4b7` (tag `m150.7871.04`, upstream's build of the same commit) |
+| depot_tools | recorded by the first build in `PINS` and `BUILD-RECORD` |
+| Xcode | 26.6 |
+
+`PINS` is the source of truth. This table follows it.
+
+## Build command
+
+On macOS with Xcode at the version in `PINS`, from a clean checkout:
+
+```sh
+./build.sh                  # writes out/LiveKitWebRTC.xcframework.zip and out/BUILD-RECORD
+```
+
+It takes hours and tens of GB of disk. `OUT=<dir>` and `WORK=<dir>` move the output and the
+scratch tree. CI runs the same command (`.github/workflows/build.yml`), twice per change, and
+compares the two results.
+
 ## What goes in
 
 | File | What it is |
@@ -30,12 +53,20 @@ and LiveKit's Swift SDK share it. The design is honeycomb-ios `docs/design/AES-2
 - the build time and the CI run.
 
 CI builds twice on fresh runners and compares the two records. A tag `build-*` publishes a
-release whose notes carry the zip's sha256 and the full `BUILD-RECORD`.
+release whose notes carry each asset's sha256 and the full `BUILD-RECORD`.
 
-## Checking a release
+## Releases and their sha256
+
+| Release | Asset | sha256 |
+|---|---|---|
+| (none yet; the first is `build-1` once the build PR merges) | | |
+
+Each release's notes list the sha256 of **every asset**: `LiveKitWebRTC.xcframework.zip` and
+`BUILD-RECORD`. Each release adds a row here. The zip's sha256 is the checksum SwiftPM checks in
+`Package.swift`. To check a download:
 
 ```sh
-shasum -a 256 LiveKitWebRTC.xcframework.zip   # equals the sha256 in the release notes
+shasum -a 256 LiveKitWebRTC.xcframework.zip BUILD-RECORD   # equal the sha256 values in the notes and here
 ```
 
 To rebuild it, run `./build.sh` on macOS with Xcode at the version in `PINS`. It takes hours and
