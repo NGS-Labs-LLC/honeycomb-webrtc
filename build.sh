@@ -68,9 +68,13 @@ xcf=$pkg/LiveKitWebRTC.xcframework
 # What the app relies on: the 256-bit key provider, exported, and every class prefixed.
 header=$(find "$xcf/ios-arm64/LiveKitWebRTC.framework/Headers" -name RTCFrameCryptorKeyProvider.h)
 grep -q "keySize:(int)keySize" "$header" || fail "RTCFrameCryptorKeyProvider.h has no keySize"
+# The symbol list is read in full before matching: grep -q stopping early would break nm's pipe,
+# and with pipefail that reads as a missing symbol.
 for bin in "$xcf"/*/LiveKitWebRTC.framework/LiveKitWebRTC; do
-	nm -gU "$bin" | grep -q '_OBJC_CLASS_\$_LKRTCFrameCryptorKeyProvider$' || fail "$bin does not export LKRTCFrameCryptorKeyProvider"
-	if nm -gU "$bin" | grep -q '_OBJC_CLASS_\$_RTC'; then fail "$bin exports unprefixed RTC classes"; fi
+	symbols=$(nm -gU "$bin") || fail "nm could not read $bin"
+	grep -q '_OBJC_CLASS_\$_LKRTCFrameCryptorKeyProvider$' <<<"$symbols" || fail "$bin does not export LKRTCFrameCryptorKeyProvider"
+	if grep -q '_OBJC_CLASS_\$_RTC' <<<"$symbols"; then fail "$bin exports unprefixed RTC classes"; fi
+	say "$(basename "$(dirname "$(dirname "$bin")")"): LKRTCFrameCryptorKeyProvider exported, $(grep -c '_OBJC_CLASS_\$_LKRTC' <<<"$symbols") LKRTC classes, no RTC classes"
 done
 
 cp "$zip" "$out/"
