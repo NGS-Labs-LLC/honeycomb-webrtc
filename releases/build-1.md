@@ -65,11 +65,11 @@ shasum -a 256 /tmp/build-1/*        # the zip must equal the value above and the
    git push origin 150.7871.4-hc.1
    ```
 2. **The fork:** push `2.18.0-hc.1` at `NGS-Labs-LLC/client-sdk-swift`
-   `agent/ui-ux/livekit-keysize` head `b57e2c98`. That fork tag doesn't start the fork's CI,
+   `agent/ui-ux/livekit-keysize` head `ed19584d`. That fork tag doesn't start the fork's CI,
    which runs only on pull requests to `main` and on published releases.
    ```sh
    git fetch origin agent/ui-ux/livekit-keysize
-   git tag -a 2.18.0-hc.1 -m "LiveKit Swift SDK 2.18.0 for Honeycomb (D82)" b57e2c989cd01b71995c783e881f74d87603cb49
+   git tag -a 2.18.0-hc.1 -m "LiveKit Swift SDK 2.18.0 for Honeycomb (D82)" ed19584d2142b621fe029d45608fcc80082e7b9e
    git push origin 2.18.0-hc.1
    ```
 3. **honeycomb-ios:** the G3b PR's CI resolves both. It fails until all three tags exist.
