@@ -3,7 +3,8 @@ honeycomb-webrtc patch to webrtc-build m150.7871.04 (717ec1d), D82.
 build/apple/xcframework.sh builds 11 slices (iOS, simulator x64, macOS, Catalyst, tvOS,
 visionOS). This keeps the two the app ships and tests on, iOS arm64 device and iOS arm64
 simulator, with their dSYMs, and writes a normalised zip (fixed times, sorted entries, no extra
-attributes) so two builds of the same input can be compared byte for byte. GN arguments are
+attributes) so two builds of the same input can be compared byte for byte, with the
+xcframework's Info.plist listing its slices in a fixed order. GN arguments are
 upstream's, unchanged.
 
 build.sh checks every file in UPSTREAM.sha256 before applying this with `patch -p1` in
@@ -106,7 +107,7 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
  )
  
  for i in "${!FRAMEWORK_PATHS[@]}"; do
-@@ -186,16 +144,11 @@
+@@ -186,16 +144,21 @@
  
  cp LICENSE "$OUT_DIR/$FRAMEWORK_NAME.xcframework/"
  
@@ -119,9 +120,19 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
 -ln -s "Versions/Current/$FRAMEWORK_NAME" "$FRAMEWORK_NAME"
 -
 +# honeycomb (D82): a normalised zip (fixed times, sorted entries, no extra attributes), so two
-+# builds of the same input can be compared byte for byte.
++# builds of the same input can be compared byte for byte. xcodebuild -create-xcframework lists the
++# slices in Info.plist in no fixed order, so they are sorted by identifier first.
  cd "$OUT_DIR"
 -zip --symlinks -9 -r "$FRAMEWORK_NAME.xcframework.zip" "$FRAMEWORK_NAME.xcframework"
++python3 - "$FRAMEWORK_NAME.xcframework/Info.plist" <<'PLIST'
++import plistlib, sys
++path = sys.argv[1]
++with open(path, "rb") as f:
++    info = plistlib.load(f)
++info["AvailableLibraries"].sort(key=lambda library: library["LibraryIdentifier"])
++with open(path, "wb") as f:
++    plistlib.dump(info, f, fmt=plistlib.FMT_XML, sort_keys=True)
++PLIST
 +find "$FRAMEWORK_NAME.xcframework" -exec touch -h -t 200001010000 {} +
 +find "$FRAMEWORK_NAME.xcframework" | LC_ALL=C sort | zip --symlinks -X -9 "$FRAMEWORK_NAME.xcframework.zip" -@
  
