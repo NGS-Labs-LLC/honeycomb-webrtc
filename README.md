@@ -69,9 +69,6 @@ Each release's notes list the sha256 of **every asset**: `LiveKitWebRTC.xcframew
 shasum -a 256 LiveKitWebRTC.xcframework.zip BUILD-RECORD   # equal the sha256 values in the notes and here
 ```
 
-To rebuild it, run `./build.sh` on macOS with Xcode at the version in `PINS`. It takes hours and
-tens of GB of disk.
-
 ## Rules
 
 - Draft PRs only, merged by a person.
