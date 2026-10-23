@@ -15,7 +15,7 @@ and LiveKit's Swift SDK share it. The design is honeycomb-ios `docs/design/AES-2
 |---|---|
 | WebRTC source | [webrtc-sdk/webrtc](https://github.com/webrtc-sdk/webrtc) `a545de45259b47dfac5f3635863e47cb601f1bb2` (`m150_release`, 2026-10-22) |
 | Build scripts | [webrtc-sdk/webrtc-build](https://github.com/webrtc-sdk/webrtc-build) `717ec1dc5a94389d691e09cccaf3d7b3364fb4b7` (tag `m150.7871.04`, upstream's build of the same commit) |
-| depot_tools | recorded by the first build in `PINS` and `BUILD-RECORD` |
+| depot_tools | `4be4e4628e093c4ad50210db5dcfa05a88280bda` (HEAD at the first green build, 2026-10-23) |
 | Xcode | 26.6 |
 
 `PINS` is the source of truth. This table follows it.
@@ -61,12 +61,12 @@ release whose notes carry each asset's sha256 and the full `BUILD-RECORD`.
 |---|---|---|
 | (none yet; the first is `build-1` once the build PR merges) | | |
 
-Each release's notes list the sha256 of **every asset**: `LiveKitWebRTC.xcframework.zip` and
-`BUILD-RECORD`. Each release adds a row here. The zip's sha256 is the checksum SwiftPM checks in
+Each release's notes list the sha256 of **every asset**: `LiveKitWebRTC.xcframework.zip`,
+`BUILD-RECORD` and `MANIFEST.sha256` (the sha256 of every file inside the framework). Each release adds a row here. The zip's sha256 is the checksum SwiftPM checks in
 `Package.swift`. To check a download:
 
 ```sh
-shasum -a 256 LiveKitWebRTC.xcframework.zip BUILD-RECORD   # equal the sha256 values in the notes and here
+shasum -a 256 LiveKitWebRTC.xcframework.zip BUILD-RECORD MANIFEST.sha256   # equal the sha256 values in the notes and here
 ```
 
 ## Rules

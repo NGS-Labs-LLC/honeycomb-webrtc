@@ -78,6 +78,10 @@ for bin in "$xcf"/*/LiveKitWebRTC.framework/LiveKitWebRTC; do
 done
 
 cp "$zip" "$out/"
+# Every file in the framework, so two builds can be compared file by file.
+(cd "$pkg" && find LiveKitWebRTC.xcframework -type f | LC_ALL=C sort | while read -r f; do
+	printf '%s  %s\n' "$($sha256 "$f" | cut -d' ' -f1)" "$f"
+done) > "$out/MANIFEST.sha256"
 {
 	echo "# LiveKitWebRTC build record (honeycomb-ios D82). Written by build.sh."
 	echo "WEBRTC_COMMIT=$WEBRTC_COMMIT"
@@ -95,6 +99,7 @@ cp "$zip" "$out/"
 		echo "BINARY_SHA256[$slice]=$($sha256 "$bin" | cut -d' ' -f1)"
 	done
 	echo "HEADER_SHA256[RTCFrameCryptorKeyProvider.h]=$($sha256 "$header" | cut -d' ' -f1)"
+	echo "MANIFEST_SHA256=$($sha256 "$out/MANIFEST.sha256" | cut -d' ' -f1)  # MANIFEST.sha256: every file in the framework"
 	echo "# GN arguments (iOS-arm64-device):"
 	sed 's/^/#   /' "$pkg/iOS-arm64-device/args.gn"
 } > "$out/BUILD-RECORD"

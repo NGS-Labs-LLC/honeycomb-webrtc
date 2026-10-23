@@ -8,6 +8,6 @@ WEBRTC_BUILD_REPO=https://github.com/webrtc-sdk/webrtc-build.git
 # Tag m150.7871.04: upstream's build of the same WebRTC commit.
 WEBRTC_BUILD_COMMIT=717ec1dc5a94389d691e09cccaf3d7b3364fb4b7
 DEPOT_TOOLS_REPO=https://chromium.googlesource.com/chromium/tools/depot_tools.git
-# Empty until the first build records the commit it used; from then on, that commit.
-DEPOT_TOOLS_COMMIT=
+# Recorded by the first green build (run 5, 2026-10-23).
+DEPOT_TOOLS_COMMIT=4be4e4628e093c4ad50210db5dcfa05a88280bda
 XCODE_VERSION=26.6

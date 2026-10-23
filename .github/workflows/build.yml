@@ -76,6 +76,8 @@ jobs:
         # Reports only: byte-for-byte reproducibility is measured here, not yet claimed (D82 3.5).
         run: |
           for i in 1 2; do grep -E '^(ZIP_SHA256|BINARY_SHA256|HEADER_SHA256)' "build-$i/out/BUILD-RECORD" > "$i.txt"; done
+          echo "Files that differ between the two builds:"
+          diff build-1/out/MANIFEST.sha256 build-2/out/MANIFEST.sha256 | tee -a "$GITHUB_STEP_SUMMARY" || true
           if diff -u 1.txt 2.txt; then
             echo "REPRODUCIBLE: both builds have the same zip, slices and header" | tee -a "$GITHUB_STEP_SUMMARY"
           else
@@ -99,12 +101,14 @@ jobs:
         run: |
           zip_sum=$(sha256sum out/LiveKitWebRTC.xcframework.zip | cut -d' ' -f1)
           record_sum=$(sha256sum out/BUILD-RECORD | cut -d' ' -f1)
+          manifest_sum=$(sha256sum out/MANIFEST.sha256 | cut -d' ' -f1)
           grep -q "^ZIP_SHA256=$zip_sum$" out/BUILD-RECORD
           {
             echo "| Asset | sha256 |"
             echo "|---|---|"
             echo "| \`LiveKitWebRTC.xcframework.zip\` | \`$zip_sum\` |"
             echo "| \`BUILD-RECORD\` | \`$record_sum\` |"
+            echo "| \`MANIFEST.sha256\` | \`$manifest_sum\` |"
             echo
             echo "Built from webrtc-sdk/webrtc \`$(grep '^WEBRTC_COMMIT=' out/BUILD-RECORD | cut -d= -f2)\` with \`./build.sh\`."
             echo
@@ -112,5 +116,5 @@ jobs:
             cat out/BUILD-RECORD
             echo '```'
           } > notes.md
-          gh release create "$GITHUB_REF_NAME" out/LiveKitWebRTC.xcframework.zip out/BUILD-RECORD \
+          gh release create "$GITHUB_REF_NAME" out/LiveKitWebRTC.xcframework.zip out/BUILD-RECORD out/MANIFEST.sha256 \
             --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes-file notes.md
