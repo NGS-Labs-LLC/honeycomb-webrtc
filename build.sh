@@ -44,7 +44,12 @@ else
 	say "no DEPOT_TOOLS_COMMIT pinned yet: using HEAD and recording it"
 fi
 depot_tools_commit=$(git -C "$src/depot_tools" rev-parse HEAD)
+say "depot_tools at $depot_tools_commit"
 export DEPOT_TOOLS_UPDATE=0
+# With updates off, depot_tools never bootstraps its own Python (python3_bin_reldir.txt), which
+# gn and ninja's wrappers need; ensure_bootstrap does that without moving the checkout.
+(cd "$src/depot_tools" && ./ensure_bootstrap)
+[ "$(git -C "$src/depot_tools" rev-parse HEAD)" = "$depot_tools_commit" ] || fail "depot_tools moved during bootstrap"
 df -h "$work" | tail -1
 
 say "building WebRTC $WEBRTC_COMMIT"
