@@ -1,0 +1,4 @@
+fb5a9f15d4452ee0cf44bfac5c4b0f5f222cd095b0535578b8ae2c43c62776d6  build/apple/xcframework.sh
+85ef92accbe3b0953400c7d02f0965468b39dfb4b196499718d07f802a967761  build/build.apple_prefixed.sh
+bbe60069ab641e6a6eebf45d9a131c14afe93ad24449bc7e5db7908eaa967a86  build/run.py
+649ca0ac6de2386261f978ddd03840855e851a14545840f975edce703e9b48ad  build/patches/apple_prefix.patch
