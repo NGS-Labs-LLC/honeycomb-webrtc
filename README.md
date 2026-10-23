@@ -59,7 +59,8 @@ release whose notes carry each asset's sha256 and the full `BUILD-RECORD`.
 
 | Release | Asset | sha256 |
 |---|---|---|
-| (none yet; the first is `build-1` once the build PR merges) | | |
+| `build-1` (to be tagged after the build PR merges; CI run [39972294655](https://github.com/NGS-Labs-LLC/honeycomb-webrtc/actions/runs/39972294655) built it twice, identical) | `LiveKitWebRTC.xcframework.zip` | `660396f289a4bb73588b15bc976aacecbb2ef425ae2f17bfe24c80603eefc5b6` |
+| | `BUILD-RECORD`, `MANIFEST.sha256` | in the release notes (the record names its own run) |
 
 Each release's notes list the sha256 of **every asset**: `LiveKitWebRTC.xcframework.zip`,
 `BUILD-RECORD` and `MANIFEST.sha256` (the sha256 of every file inside the framework). Each release adds a row here. The zip's sha256 is the checksum SwiftPM checks in
@@ -68,6 +69,14 @@ Each release's notes list the sha256 of **every asset**: `LiveKitWebRTC.xcframew
 ```sh
 shasum -a 256 LiveKitWebRTC.xcframework.zip BUILD-RECORD MANIFEST.sha256   # equal the sha256 values in the notes and here
 ```
+
+## Using it with SwiftPM
+
+`Package.swift` exposes the product `LiveKitWebRTC` as a binary target pinned to release
+`build-1` by URL and checksum. The version tag `150.7871.4-hc.1` marks that manifest, so
+honeycomb-ios's fork of client-sdk-swift depends on it with
+`.package(url: "https://github.com/NGS-Labs-LLC/honeycomb-webrtc.git", exact: "150.7871.4-hc.1")`.
+A new build gets a new release, a new checksum here and a new `-hc.N` tag.
 
 ## Rules
 
