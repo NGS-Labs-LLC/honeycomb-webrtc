@@ -2,13 +2,16 @@
 
 `build-1` plus a third slice, **Mac Catalyst arm64** (`ios-arm64-maccatalyst`), for the
 honeycomb-ios Mac app (Phase 5; Paul chose Catalyst on 2026-10-25). The pins are unchanged. The
-patch keeps upstream's `catalyst-arm64` platform, with the same GN arguments upstream uses for
-it, and nothing else. The iOS slices are built from the same inputs as `build-1`, so they should
+patch keeps upstream's `catalyst-arm64` platform with upstream's GN arguments, except the
+deployment target. That is 26.0 (the app's minimum), not upstream's 14.0. The first CI run
+showed that at 14.0 the macOS 26.5 SDK's newer system libraries (`libsystem_eligibility`,
+`libsystem_sanitizers`, `libsystem_trial`) refuse to link: "incompatible with arm64
+(macCatalyst14.0.0)". The iOS slices are built from the same inputs as `build-1`, so they should
 match it.
 
 `build.sh` also checks the new slice:
 - it is a versioned bundle (`LiveKitWebRTC` → `Versions/Current/LiveKitWebRTC`);
-- `vtool` reports `platform MACCATALYST`;
+- `vtool` reports `platform MACCATALYST` and `minos 26.0`;
 - it is arm64 only.
 
 Intel Macs aren't built: Paul's MacBook and CI's runners are Apple silicon. Adding

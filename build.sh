@@ -81,6 +81,7 @@ catalyst=$xcf/ios-arm64-maccatalyst/LiveKitWebRTC.framework
 [ -L "$catalyst/LiveKitWebRTC" ] && [ -f "$catalyst/Versions/A/LiveKitWebRTC" ] || fail "$catalyst is not a versioned bundle"
 build_info=$(xcrun vtool -show-build "$catalyst/Versions/A/LiveKitWebRTC") || fail "vtool could not read the Catalyst binary"
 grep -q 'platform MACCATALYST' <<<"$build_info" || fail "the Catalyst slice is not built for Mac Catalyst"
+grep -q 'minos 26.0' <<<"$build_info" || fail "the Catalyst slice's minimum is not 26.0"
 [ "$(lipo -archs "$catalyst/Versions/A/LiveKitWebRTC")" = "arm64" ] || fail "the Catalyst slice is not arm64 only"
 say "ios-arm64-maccatalyst: a versioned bundle, platform MACCATALYST, arm64"
 
