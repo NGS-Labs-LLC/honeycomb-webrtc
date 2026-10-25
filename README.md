@@ -5,7 +5,8 @@ This repository builds WebRTC for the Honeycomb Hive iOS app from
 [webrtc-sdk](https://github.com/webrtc-sdk/webrtc) `m150_release` at a pinned commit. That
 commit is the first whose frame-encryption key provider accepts `keySize: 256`, which gives
 AES-256-GCM media frames (`hive-frame/2`). The framework is `LiveKitWebRTC.xcframework`,
-prefixed `LKRTC` and built for iOS arm64 devices and the arm64 simulator. The app's 1:1 calls
+prefixed `LKRTC` and built for iOS arm64 devices, the arm64 simulator and Mac Catalyst on
+arm64 (the Mac app). The app's 1:1 calls
 and LiveKit's Swift SDK share it. The design is honeycomb-ios `docs/design/AES-256-FRAMES.md`
 (D82).
 
@@ -38,7 +39,7 @@ compares the two results.
 |---|---|
 | `PINS` | Every input, exact: the webrtc-sdk commit, the [webrtc-build](https://github.com/webrtc-sdk/webrtc-build) commit whose scripts build it, depot_tools, Xcode |
 | `patches/UPSTREAM.sha256` | sha256 of the webrtc-build files used. `build.sh` refuses if any differs |
-| `patches/webrtc-build-m150.7871.04.patch` | The one patch, to webrtc-build's `xcframework.sh`. It builds two slices instead of eleven and writes a normalised zip. GN arguments are upstream's. Nothing in WebRTC itself is patched beyond upstream's own `apple_prefix.patch` |
+| `patches/webrtc-build-m150.7871.04.patch` | The one patch, to webrtc-build's `xcframework.sh`. It builds three slices instead of eleven (iOS device, iOS simulator, Mac Catalyst, all arm64) and writes a normalised zip. GN arguments are upstream's. Nothing in WebRTC itself is patched beyond upstream's own `apple_prefix.patch` |
 | `build.sh` | Fetches the pins, checks them, applies the patch, builds, checks the output (`keySize`, every class prefixed), and writes `BUILD-RECORD` |
 
 ## What comes out

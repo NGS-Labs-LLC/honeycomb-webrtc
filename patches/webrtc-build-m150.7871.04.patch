@@ -1,8 +1,8 @@
 honeycomb-webrtc patch to webrtc-build m150.7871.04 (717ec1d), D82.
 
 build/apple/xcframework.sh builds 11 slices (iOS, simulator x64, macOS, Catalyst, tvOS,
-visionOS). This keeps the two the app ships and tests on, iOS arm64 device and iOS arm64
-simulator, with their dSYMs, and writes a normalised zip (fixed times, sorted entries, no extra
+visionOS). This keeps the three the app ships and tests on, iOS arm64 device, iOS arm64
+simulator and Mac Catalyst arm64 (the Mac app, honeycomb-ios Phase 5), with their dSYMs, and writes a normalised zip (fixed times, sorted entries, no extra
 attributes) so two builds of the same input can be compared byte for byte, with the
 xcframework's Info.plist listing its slices in a fixed order. GN arguments are
 upstream's, unchanged.
@@ -13,18 +13,19 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
 
 --- a/build/apple/xcframework.sh
 +++ b/build/apple/xcframework.sh
-@@ -62,18 +62,10 @@
+@@ -62,18 +62,12 @@
        treat_warnings_as_errors = true
        use_rtti = true"
  
-+# honeycomb (D82): only the slices the app ships and tests on.
++# honeycomb (D82): only the slices the app ships and tests on: iOS, and Mac Catalyst on Apple
++# silicon for the Mac app (honeycomb-ios Phase 5).
  PLATFORMS=(
    "iOS-arm64-device:target_os=\"ios\" target_environment=\"device\" target_cpu=\"arm64\" ios_deployment_target=\"13.0\""
    "iOS-arm64-simulator:target_os=\"ios\" target_environment=\"simulator\" target_cpu=\"arm64\" ios_deployment_target=\"13.0\""
 -  "iOS-x64-simulator:target_os=\"ios\" target_environment=\"simulator\" target_cpu=\"x64\" ios_deployment_target=\"13.0\""
 -  "macOS-arm64:target_os=\"mac\" target_cpu=\"arm64\" mac_deployment_target=\"10.15\""
 -  "macOS-x64:target_os=\"mac\" target_cpu=\"x64\" mac_deployment_target=\"10.15\""
--  "catalyst-arm64:target_os=\"ios\" target_environment=\"catalyst\" target_cpu=\"arm64\" ios_deployment_target=\"14.0\""
+   "catalyst-arm64:target_os=\"ios\" target_environment=\"catalyst\" target_cpu=\"arm64\" ios_deployment_target=\"14.0\""
 -  "catalyst-x64:target_os=\"ios\" target_environment=\"catalyst\" target_cpu=\"x64\" ios_deployment_target=\"14.0\""
 -  "tvOS-arm64-device:target_os=\"ios\" target_environment=\"appletv\" target_cpu=\"arm64\" ios_deployment_target=\"17.0\""
 -  "tvOS-arm64-simulator:target_os=\"ios\" target_environment=\"appletvsimulator\" target_cpu=\"arm64\" ios_deployment_target=\"17.0\""
@@ -33,7 +34,7 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
  )
  
  cd "$SOURCE_DIR"
-@@ -98,39 +90,17 @@
+@@ -98,39 +92,17 @@
    end_group
  done
  
@@ -71,7 +72,7 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
 -  cp -R "$OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.dSYM" "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.dSYM"
 -  lipo -create -output "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/iOS-x64-simulator/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME"
 -fi
-+for slice in iOS-device-lib:iOS-arm64-device iOS-simulator-lib:iOS-arm64-simulator; do
++for slice in iOS-device-lib:iOS-arm64-device iOS-simulator-lib:iOS-arm64-simulator catalyst-lib:catalyst-arm64; do
 +  lib="${slice%%:*}"
 +  src="${slice#*:}"
 +  mkdir -p "$OUT_DIR/$lib"
@@ -83,12 +84,12 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
  
  end_group
  
-@@ -141,23 +111,11 @@
+@@ -141,23 +113,13 @@
  FRAMEWORK_PATHS=(
    "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.framework"
    "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.framework"
 -  "$OUT_DIR/macOS-lib/$FRAMEWORK_NAME.framework"
--  "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.framework"
+   "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.framework"
 -  "$OUT_DIR/tvOS-arm64-device/$FRAMEWORK_NAME.framework"
 -  "$OUT_DIR/tvOS-arm64-simulator/$FRAMEWORK_NAME.framework"
 -  "$OUT_DIR/xrOS-arm64-device/$FRAMEWORK_NAME.framework"
@@ -99,7 +100,7 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
    "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.dSYM"
    "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.dSYM"
 -  "$OUT_DIR/macOS-lib/$FRAMEWORK_NAME.dSYM"
--  "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.dSYM"
+   "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.dSYM"
 -  "$OUT_DIR/tvOS-arm64-device/$FRAMEWORK_NAME.dSYM"
 -  "$OUT_DIR/tvOS-arm64-simulator/$FRAMEWORK_NAME.dSYM"
 -  "$OUT_DIR/xrOS-arm64-device/$FRAMEWORK_NAME.dSYM"
@@ -107,7 +108,7 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
  )
  
  for i in "${!FRAMEWORK_PATHS[@]}"; do
-@@ -186,16 +144,21 @@
+@@ -186,16 +148,30 @@
  
  cp LICENSE "$OUT_DIR/$FRAMEWORK_NAME.xcframework/"
  
@@ -118,7 +119,15 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
 -cd "$OUT_DIR/$FRAMEWORK_NAME.xcframework/ios-arm64_x86_64-maccatalyst/$FRAMEWORK_NAME.framework/"
 -mv "$FRAMEWORK_NAME" "Versions/A/$FRAMEWORK_NAME"
 -ln -s "Versions/Current/$FRAMEWORK_NAME" "$FRAMEWORK_NAME"
--
++# A Catalyst framework is a versioned bundle. Upstream moves the binary into Versions/A after
++# lipo replaced its top-level symlink with a file; with no lipo here the copy keeps the symlink, so
++# this only runs if the binary is a plain file.
++catalyst_framework="$OUT_DIR/$FRAMEWORK_NAME.xcframework/ios-arm64-maccatalyst/$FRAMEWORK_NAME.framework"
++if [[ -f "$catalyst_framework/$FRAMEWORK_NAME" && ! -L "$catalyst_framework/$FRAMEWORK_NAME" ]]; then
++  mv "$catalyst_framework/$FRAMEWORK_NAME" "$catalyst_framework/Versions/A/$FRAMEWORK_NAME"
++  ln -s "Versions/Current/$FRAMEWORK_NAME" "$catalyst_framework/$FRAMEWORK_NAME"
++fi
+ 
 +# honeycomb (D82): a normalised zip (fixed times, sorted entries, no extra attributes), so two
 +# builds of the same input can be compared byte for byte. xcodebuild -create-xcframework lists the
 +# slices in Info.plist in no fixed order, so they are sorted by identifier first.

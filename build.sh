@@ -1,9 +1,9 @@
 #!/bin/bash
-# Builds LiveKitWebRTC.xcframework (prefixed LKRTC classes, iOS arm64 device and simulator) from
-# the inputs in PINS (honeycomb-ios D82, docs/design/AES-256-FRAMES.md). It refuses when an upstream
-# file differs from patches/UPSTREAM.sha256 or the patch does not apply cleanly, as honeycomb-sfu's
-# scripts/patched-livekit.sh does, and writes the zip and BUILD-RECORD to $OUT (default
-# out/). Runs on macOS with Xcode selected; takes hours and tens of GB of disk.
+# Builds LiveKitWebRTC.xcframework (prefixed LKRTC classes, iOS arm64 device and simulator, Mac
+# Catalyst arm64) from the inputs in PINS (honeycomb-ios D82, docs/design/AES-256-FRAMES.md). It
+# refuses when an upstream file differs from patches/UPSTREAM.sha256 or the patch does not apply
+# cleanly, as honeycomb-sfu's scripts/patched-livekit.sh does, and writes the zip and BUILD-RECORD
+# to $OUT (default out/). Runs on macOS with Xcode selected; takes hours and tens of GB of disk.
 set -euo pipefail
 cd "$(dirname "$0")"
 here=$PWD
@@ -76,6 +76,13 @@ for bin in "$xcf"/*/LiveKitWebRTC.framework/LiveKitWebRTC; do
 	if grep -q '_OBJC_CLASS_\$_RTC' <<<"$symbols"; then fail "$bin exports unprefixed RTC classes"; fi
 	say "$(basename "$(dirname "$(dirname "$bin")")"): LKRTCFrameCryptorKeyProvider exported, $(grep -c '_OBJC_CLASS_\$_LKRTC' <<<"$symbols") LKRTC classes, no RTC classes"
 done
+# The Mac app's slice: a versioned bundle whose binary is built for Mac Catalyst on arm64.
+catalyst=$xcf/ios-arm64-maccatalyst/LiveKitWebRTC.framework
+[ -L "$catalyst/LiveKitWebRTC" ] && [ -f "$catalyst/Versions/A/LiveKitWebRTC" ] || fail "$catalyst is not a versioned bundle"
+build_info=$(xcrun vtool -show-build "$catalyst/Versions/A/LiveKitWebRTC") || fail "vtool could not read the Catalyst binary"
+grep -q 'platform MACCATALYST' <<<"$build_info" || fail "the Catalyst slice is not built for Mac Catalyst"
+[ "$(lipo -archs "$catalyst/Versions/A/LiveKitWebRTC")" = "arm64" ] || fail "the Catalyst slice is not arm64 only"
+say "ios-arm64-maccatalyst: a versioned bundle, platform MACCATALYST, arm64"
 
 cp "$zip" "$out/"
 # Every file in the framework, so two builds can be compared file by file.
