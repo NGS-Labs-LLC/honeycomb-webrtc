@@ -1,9 +1,9 @@
 #!/bin/bash
-# Builds LiveKitWebRTC.xcframework (prefixed LKRTC classes, iOS arm64 device and simulator) from
-# the inputs in PINS (honeycomb-ios D82, docs/design/AES-256-FRAMES.md). It refuses when an upstream
-# file differs from patches/UPSTREAM.sha256 or the patch does not apply cleanly, as honeycomb-sfu's
-# scripts/patched-livekit.sh does, and writes the zip and BUILD-RECORD to $OUT (default
-# out/). Runs on macOS with Xcode selected; takes hours and tens of GB of disk.
+# Builds LiveKitWebRTC.xcframework (prefixed LKRTC classes, iOS arm64 device, iOS simulator and Mac
+# Catalyst for arm64 and x86_64) from the inputs in PINS (honeycomb-ios D82, docs/design/AES-256-FRAMES.md). It
+# refuses when an upstream file differs from patches/UPSTREAM.sha256 or the patch does not apply
+# cleanly, as honeycomb-sfu's scripts/patched-livekit.sh does, and writes the zip and BUILD-RECORD
+# to $OUT (default out/). Runs on macOS with Xcode selected; takes hours and tens of GB of disk.
 set -euo pipefail
 cd "$(dirname "$0")"
 here=$PWD
@@ -46,6 +46,10 @@ fi
 depot_tools_commit=$(git -C "$src/depot_tools" rev-parse HEAD)
 say "depot_tools at $depot_tools_commit"
 export DEPOT_TOOLS_UPDATE=0
+# The Catalyst slice builds against upstream's Xcode (PINS); xcframework.sh reads this.
+export CATALYST_DEVELOPER_DIR=/Applications/Xcode_${CATALYST_XCODE_VERSION}.app/Contents/Developer
+[ -d "$CATALYST_DEVELOPER_DIR" ] || fail "no Xcode $CATALYST_XCODE_VERSION at $CATALYST_DEVELOPER_DIR for the Catalyst slice"
+say "Catalyst slice with $(DEVELOPER_DIR=$CATALYST_DEVELOPER_DIR xcodebuild -version | tr '\n' ' ')"
 # With updates off, depot_tools never bootstraps its own Python (python3_bin_reldir.txt), which
 # gn and ninja's wrappers need; ensure_bootstrap does that without moving the checkout.
 (cd "$src/depot_tools" && ./ensure_bootstrap)
@@ -76,6 +80,19 @@ for bin in "$xcf"/*/LiveKitWebRTC.framework/LiveKitWebRTC; do
 	if grep -q '_OBJC_CLASS_\$_RTC' <<<"$symbols"; then fail "$bin exports unprefixed RTC classes"; fi
 	say "$(basename "$(dirname "$(dirname "$bin")")"): LKRTCFrameCryptorKeyProvider exported, $(grep -c '_OBJC_CLASS_\$_LKRTC' <<<"$symbols") LKRTC classes, no RTC classes"
 done
+# The simulator slice and the Mac app's slice run on Apple silicon and on Intel (Paul's CI Mac).
+archs() { lipo -archs "$1" | tr ' ' '\n' | LC_ALL=C sort | xargs; }
+simulator=$xcf/ios-arm64_x86_64-simulator/LiveKitWebRTC.framework/LiveKitWebRTC
+[ "$(archs "$simulator")" = "arm64 x86_64" ] || fail "the simulator slice is not x86_64 + arm64: $(lipo -archs "$simulator")"
+say "ios-arm64_x86_64-simulator: arm64 x86_64"
+# The Mac app's slice: a versioned bundle whose binary is built for Mac Catalyst.
+catalyst=$xcf/ios-arm64_x86_64-maccatalyst/LiveKitWebRTC.framework
+[ -L "$catalyst/LiveKitWebRTC" ] && [ -f "$catalyst/Versions/A/LiveKitWebRTC" ] || fail "$catalyst is not a versioned bundle"
+build_info=$(xcrun vtool -show-build "$catalyst/Versions/A/LiveKitWebRTC") || fail "vtool could not read the Catalyst binary"
+grep -q 'platform MACCATALYST' <<<"$build_info" || fail "the Catalyst slice is not built for Mac Catalyst"
+grep -q 'minos 14.0' <<<"$build_info" || fail "the Catalyst slice's minimum is not 14.0"
+[ "$(archs "$catalyst/Versions/A/LiveKitWebRTC")" = "arm64 x86_64" ] || fail "the Catalyst slice is not x86_64 + arm64: $(lipo -archs "$catalyst/Versions/A/LiveKitWebRTC")"
+say "ios-arm64_x86_64-maccatalyst: a versioned bundle, platform MACCATALYST, arm64 x86_64"
 
 cp "$zip" "$out/"
 # Every file in the framework, so two builds can be compared file by file.
@@ -90,6 +107,7 @@ done) > "$out/MANIFEST.sha256"
 	echo "PATCH_SHA256=$($sha256 "$patchfile" | cut -d' ' -f1)"
 	echo "RUNNER_IMAGE=${ImageOS:-?} ${ImageVersion:-?}"
 	echo "XCODE=$(xcodebuild -version | tr '\n' ' ')"
+	echo "CATALYST_XCODE=$(DEVELOPER_DIR=$CATALYST_DEVELOPER_DIR xcodebuild -version | tr '\n' ' ')"
 	echo "BUILD_MINUTES=$minutes"
 	echo "RUN=${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-local}"
 	echo "ZIP_SHA256=$($sha256 "$zip" | cut -d' ' -f1)"
