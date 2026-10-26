@@ -6,7 +6,10 @@ patch keeps upstream's `catalyst-arm64` platform with upstream's GN arguments, e
 deployment target. That is 26.0 (the app's minimum), not upstream's 14.0. The first CI run
 showed that at 14.0 the macOS 26.5 SDK's newer system libraries (`libsystem_eligibility`,
 `libsystem_sanitizers`, `libsystem_trial`) refuse to link: "incompatible with arm64
-(macCatalyst14.0.0)". The iOS slices are built from the same inputs as `build-1`, so they should
+(macCatalyst14.0.0)". At 26.0, the second run then stopped on a deprecation that only Catalyst
+reports (`RTCFileVideoCapturer`'s `tracksWithMediaType:`, deprecated since macCatalyst 18), under
+upstream's `treat_warnings_as_errors`. That is off for the Catalyst slice only: the iOS slices keep
+upstream's arguments exactly, so they can still be compared with `build-1`. The iOS slices are built from the same inputs as `build-1`, so they should
 match it.
 
 `build.sh` also checks the new slice:
