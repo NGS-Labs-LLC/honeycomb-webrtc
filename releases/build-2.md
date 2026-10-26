@@ -1,12 +1,16 @@
 # Release `build-2`: Mac Catalyst
 
-`build-1` plus a third slice, **Mac Catalyst arm64** (`ios-arm64-maccatalyst`), for the
-honeycomb-ios Mac app (Phase 5; Paul chose Catalyst on 2026-10-25). The patch keeps upstream's
-`catalyst-arm64` platform and its GN arguments unchanged.
+`build-1` plus a third slice, **Mac Catalyst arm64 + x86_64** (`ios-arm64_x86_64-maccatalyst`),
+for the honeycomb-ios Mac app (Phase 5; Paul chose Catalyst on 2026-10-25). The iOS simulator
+slice gains **x86_64** too (`ios-arm64_x86_64-simulator`, was `ios-arm64-simulator`), because
+honeycomb-ios CI now runs on Paul's Intel MacBook (honeycomb-ios D114). The patch keeps
+upstream's `catalyst-arm64`, `catalyst-x64` and `iOS-x64-simulator` platforms, their GN arguments
+and upstream's own lipo steps unchanged.
 
 **One difference, the SDK:** the Catalyst slice links against **Xcode 26.0**, which is upstream's
 Xcode for this tag (`CATALYST_XCODE_VERSION` in `PINS`). The iOS slices stay on Xcode 26.6, so
-they should match `build-1`.
+the device slice should match `build-1`'s. The simulator slice's arm64 half should too; the
+binary differs because it is now universal.
 - **Why:** with Xcode 26.6, the macOS 26.5 SDK's `libsystem_eligibility`, `libsystem_sanitizers`
   and `libsystem_trial` stubs list no Catalyst target, and lld refuses them. The error is
   "incompatible with arm64 (macCatalyst14.0.0)", and the same at 26.0.
@@ -16,16 +20,15 @@ they should match `build-1`.
 `build.sh` also checks the new slice:
 - it is a versioned bundle (`LiveKitWebRTC` → `Versions/Current/LiveKitWebRTC`);
 - `vtool` reports `platform MACCATALYST` and `minos 14.0`;
-- it is arm64 only.
+- it is arm64 + x86_64.
 
-Intel Macs aren't built: Paul's MacBook and CI's runners are Apple silicon. Adding
-`catalyst-x64` back is one line.
+It checks the simulator slice is arm64 + x86_64 as well.
 
 ## What this PR's CI shows
 
-Opening the PR runs the build twice on fresh `macos-26` runners and compares them. The Catalyst
-slice adds a third GN build, so expect about a third longer than `build-1`'s 60–67 minutes per
-build. That's still free on this public repository.
+Opening the PR runs the build twice on fresh `macos-26` runners and compares them. The two
+Catalyst platforms and the x86_64 simulator add three GN builds to `build-1`'s two, so expect
+roughly twice `build-1`'s 60–67 minutes per build, well inside the 360-minute timeout. That's still free on this public repository.
 
 ## Then, in order (a person pushes the tags; agent sessions can't)
 

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Builds LiveKitWebRTC.xcframework (prefixed LKRTC classes, iOS arm64 device and simulator, Mac
-# Catalyst arm64) from the inputs in PINS (honeycomb-ios D82, docs/design/AES-256-FRAMES.md). It
+# Builds LiveKitWebRTC.xcframework (prefixed LKRTC classes, iOS arm64 device, iOS simulator and Mac
+# Catalyst for arm64 and x86_64) from the inputs in PINS (honeycomb-ios D82, docs/design/AES-256-FRAMES.md). It
 # refuses when an upstream file differs from patches/UPSTREAM.sha256 or the patch does not apply
 # cleanly, as honeycomb-sfu's scripts/patched-livekit.sh does, and writes the zip and BUILD-RECORD
 # to $OUT (default out/). Runs on macOS with Xcode selected; takes hours and tens of GB of disk.
@@ -80,14 +80,19 @@ for bin in "$xcf"/*/LiveKitWebRTC.framework/LiveKitWebRTC; do
 	if grep -q '_OBJC_CLASS_\$_RTC' <<<"$symbols"; then fail "$bin exports unprefixed RTC classes"; fi
 	say "$(basename "$(dirname "$(dirname "$bin")")"): LKRTCFrameCryptorKeyProvider exported, $(grep -c '_OBJC_CLASS_\$_LKRTC' <<<"$symbols") LKRTC classes, no RTC classes"
 done
-# The Mac app's slice: a versioned bundle whose binary is built for Mac Catalyst on arm64.
-catalyst=$xcf/ios-arm64-maccatalyst/LiveKitWebRTC.framework
+# The simulator slice and the Mac app's slice run on Apple silicon and on Intel (Paul's CI Mac).
+archs() { lipo -archs "$1" | tr ' ' '\n' | LC_ALL=C sort | xargs; }
+simulator=$xcf/ios-arm64_x86_64-simulator/LiveKitWebRTC.framework/LiveKitWebRTC
+[ "$(archs "$simulator")" = "arm64 x86_64" ] || fail "the simulator slice is not x86_64 + arm64: $(lipo -archs "$simulator")"
+say "ios-arm64_x86_64-simulator: arm64 x86_64"
+# The Mac app's slice: a versioned bundle whose binary is built for Mac Catalyst.
+catalyst=$xcf/ios-arm64_x86_64-maccatalyst/LiveKitWebRTC.framework
 [ -L "$catalyst/LiveKitWebRTC" ] && [ -f "$catalyst/Versions/A/LiveKitWebRTC" ] || fail "$catalyst is not a versioned bundle"
 build_info=$(xcrun vtool -show-build "$catalyst/Versions/A/LiveKitWebRTC") || fail "vtool could not read the Catalyst binary"
 grep -q 'platform MACCATALYST' <<<"$build_info" || fail "the Catalyst slice is not built for Mac Catalyst"
 grep -q 'minos 14.0' <<<"$build_info" || fail "the Catalyst slice's minimum is not 14.0"
-[ "$(lipo -archs "$catalyst/Versions/A/LiveKitWebRTC")" = "arm64" ] || fail "the Catalyst slice is not arm64 only"
-say "ios-arm64-maccatalyst: a versioned bundle, platform MACCATALYST, arm64"
+[ "$(archs "$catalyst/Versions/A/LiveKitWebRTC")" = "arm64 x86_64" ] || fail "the Catalyst slice is not x86_64 + arm64: $(lipo -archs "$catalyst/Versions/A/LiveKitWebRTC")"
+say "ios-arm64_x86_64-maccatalyst: a versioned bundle, platform MACCATALYST, arm64 x86_64"
 
 cp "$zip" "$out/"
 # Every file in the framework, so two builds can be compared file by file.

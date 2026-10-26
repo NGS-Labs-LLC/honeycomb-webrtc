@@ -1,8 +1,9 @@
 honeycomb-webrtc patch to webrtc-build m150.7871.04 (717ec1d), D82.
 
 build/apple/xcframework.sh builds 11 slices (iOS, simulator x64, macOS, Catalyst, tvOS,
-visionOS). This keeps the three the app ships and tests on, iOS arm64 device, iOS arm64
-simulator and Mac Catalyst arm64 (the Mac app, honeycomb-ios Phase 5), with their dSYMs, and writes a normalised zip (fixed times, sorted entries, no extra
+visionOS). This keeps the ones the app ships and tests on, iOS arm64 device, the iOS
+simulator (arm64 + x86_64) and Mac Catalyst (arm64 + x86_64; the Mac app, honeycomb-ios Phase
+5), with their dSYMs, made universal with upstream's own lipo steps, and writes a normalised zip (fixed times, sorted entries, no extra
 attributes) so two builds of the same input can be compared byte for byte, with the
 xcframework's Info.plist listing its slices in a fixed order. GN arguments are
 upstream's. The Catalyst slice links against the SDK of Xcode 26.0 (upstream's Xcode), given
@@ -14,20 +15,21 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
 
 --- a/build/apple/xcframework.sh
 +++ b/build/apple/xcframework.sh
-@@ -62,18 +62,12 @@
+@@ -62,18 +62,15 @@
        treat_warnings_as_errors = true
        use_rtti = true"
  
-+# honeycomb (D82): only the slices the app ships and tests on: iOS, and Mac Catalyst on Apple
-+# silicon for the Mac app (honeycomb-ios Phase 5).
++# honeycomb (D82): only the slices the app ships and tests on: iOS device, the iOS simulator and
++# Mac Catalyst (the Mac app, honeycomb-ios Phase 5), the last two for both Apple silicon and
++# Intel (Paul's CI Mac is Intel).
  PLATFORMS=(
    "iOS-arm64-device:target_os=\"ios\" target_environment=\"device\" target_cpu=\"arm64\" ios_deployment_target=\"13.0\""
    "iOS-arm64-simulator:target_os=\"ios\" target_environment=\"simulator\" target_cpu=\"arm64\" ios_deployment_target=\"13.0\""
--  "iOS-x64-simulator:target_os=\"ios\" target_environment=\"simulator\" target_cpu=\"x64\" ios_deployment_target=\"13.0\""
+   "iOS-x64-simulator:target_os=\"ios\" target_environment=\"simulator\" target_cpu=\"x64\" ios_deployment_target=\"13.0\""
 -  "macOS-arm64:target_os=\"mac\" target_cpu=\"arm64\" mac_deployment_target=\"10.15\""
 -  "macOS-x64:target_os=\"mac\" target_cpu=\"x64\" mac_deployment_target=\"10.15\""
    "catalyst-arm64:target_os=\"ios\" target_environment=\"catalyst\" target_cpu=\"arm64\" ios_deployment_target=\"14.0\""
--  "catalyst-x64:target_os=\"ios\" target_environment=\"catalyst\" target_cpu=\"x64\" ios_deployment_target=\"14.0\""
+   "catalyst-x64:target_os=\"ios\" target_environment=\"catalyst\" target_cpu=\"x64\" ios_deployment_target=\"14.0\""
 -  "tvOS-arm64-device:target_os=\"ios\" target_environment=\"appletv\" target_cpu=\"arm64\" ios_deployment_target=\"17.0\""
 -  "tvOS-arm64-simulator:target_os=\"ios\" target_environment=\"appletvsimulator\" target_cpu=\"arm64\" ios_deployment_target=\"17.0\""
 -  "xrOS-arm64-device:target_os=\"ios\" target_environment=\"xrdevice\" target_cpu=\"arm64\" ios_deployment_target=\"26.0\""
@@ -35,7 +37,7 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
  )
  
  cd "$SOURCE_DIR"
-@@ -86,6 +80,15 @@
+@@ -86,6 +83,15 @@
    
    start_group "Building $platform"
    
@@ -51,14 +53,14 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
    gn gen "$OUT_DIR/$platform" --args="$COMMON_ARGS $config $EXTRA_GN_ARGS" --ide=xcode
    
    if [[ $platform == *"macOS"* ]]; then
-@@ -97,40 +100,19 @@
+@@ -97,17 +103,10 @@
    ninja -C "$OUT_DIR/$platform" "$build_target" -j $PARALLEL_BUILDS --quiet || exit 1
    end_group
  done
 +unset DEVELOPER_DIR
  
--start_group "Creating universal binaries (x64 + arm64)"
--
+ start_group "Creating universal binaries (x64 + arm64)"
+ 
 -mkdir -p "$OUT_DIR/macOS-lib"
 -cp -R "$OUT_DIR/macOS-x64/$FRAMEWORK_NAME.framework" "$OUT_DIR/macOS-lib/$FRAMEWORK_NAME.framework"
 -lipo -create -output "$OUT_DIR/macOS-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/macOS-arm64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/macOS-x64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME"
@@ -67,43 +69,10 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
 -  lipo -create -output "$OUT_DIR/macOS-lib/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/macOS-arm64/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/macOS-x64/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME"
 -fi
 -
--mkdir -p "$OUT_DIR/catalyst-lib"
--cp -R "$OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.framework" "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.framework"
--lipo -create -output "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/catalyst-x64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME"
--if [ -d "$OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.dSYM" ]; then
--  cp -R "$OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.dSYM" "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.dSYM"
--  lipo -create -output "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/catalyst-x64/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME"
--fi
--
--mkdir -p "$OUT_DIR/iOS-device-lib"
--cp -R "$OUT_DIR/iOS-arm64-device/$FRAMEWORK_NAME.framework" "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.framework"
--lipo -create -output "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/iOS-arm64-device/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME"
--if [ -d "$OUT_DIR/iOS-arm64-device/$FRAMEWORK_NAME.dSYM" ]; then
--  cp -R "$OUT_DIR/iOS-arm64-device/$FRAMEWORK_NAME.dSYM" "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.dSYM"
--  lipo -create -output "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/iOS-arm64-device/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME"
--fi
-+start_group "Collecting slices"
- 
--mkdir -p "$OUT_DIR/iOS-simulator-lib"
--cp -R "$OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.framework" "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.framework"
--lipo -create -output "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/iOS-x64-simulator/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME"
--if [ -d "$OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.dSYM" ]; then
--  cp -R "$OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.dSYM" "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.dSYM"
--  lipo -create -output "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/iOS-arm64-simulator/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME" "$OUT_DIR/iOS-x64-simulator/$FRAMEWORK_NAME.dSYM/Contents/Resources/DWARF/$FRAMEWORK_NAME"
--fi
-+for slice in iOS-device-lib:iOS-arm64-device iOS-simulator-lib:iOS-arm64-simulator catalyst-lib:catalyst-arm64; do
-+  lib="${slice%%:*}"
-+  src="${slice#*:}"
-+  mkdir -p "$OUT_DIR/$lib"
-+  cp -R "$OUT_DIR/$src/$FRAMEWORK_NAME.framework" "$OUT_DIR/$lib/$FRAMEWORK_NAME.framework"
-+  if [ -d "$OUT_DIR/$src/$FRAMEWORK_NAME.dSYM" ]; then
-+    cp -R "$OUT_DIR/$src/$FRAMEWORK_NAME.dSYM" "$OUT_DIR/$lib/$FRAMEWORK_NAME.dSYM"
-+  fi
-+done
- 
- end_group
- 
-@@ -141,23 +123,13 @@
+ mkdir -p "$OUT_DIR/catalyst-lib"
+ cp -R "$OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.framework" "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.framework"
+ lipo -create -output "$OUT_DIR/catalyst-lib/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/catalyst-arm64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME" "$OUT_DIR/catalyst-x64/$FRAMEWORK_NAME.framework/$FRAMEWORK_NAME"
+@@ -141,23 +140,13 @@
  FRAMEWORK_PATHS=(
    "$OUT_DIR/iOS-device-lib/$FRAMEWORK_NAME.framework"
    "$OUT_DIR/iOS-simulator-lib/$FRAMEWORK_NAME.framework"
@@ -127,7 +96,7 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
  )
  
  for i in "${!FRAMEWORK_PATHS[@]}"; do
-@@ -186,16 +158,30 @@
+@@ -186,16 +175,26 @@
  
  cp LICENSE "$OUT_DIR/$FRAMEWORK_NAME.xcframework/"
  
@@ -135,17 +104,10 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
 -mv "$FRAMEWORK_NAME" "Versions/A/$FRAMEWORK_NAME"
 -ln -s "Versions/Current/$FRAMEWORK_NAME" "$FRAMEWORK_NAME"
 -
--cd "$OUT_DIR/$FRAMEWORK_NAME.xcframework/ios-arm64_x86_64-maccatalyst/$FRAMEWORK_NAME.framework/"
--mv "$FRAMEWORK_NAME" "Versions/A/$FRAMEWORK_NAME"
--ln -s "Versions/Current/$FRAMEWORK_NAME" "$FRAMEWORK_NAME"
-+# A Catalyst framework is a versioned bundle. Upstream moves the binary into Versions/A after
-+# lipo replaced its top-level symlink with a file; with no lipo here the copy keeps the symlink, so
-+# this only runs if the binary is a plain file.
-+catalyst_framework="$OUT_DIR/$FRAMEWORK_NAME.xcframework/ios-arm64-maccatalyst/$FRAMEWORK_NAME.framework"
-+if [[ -f "$catalyst_framework/$FRAMEWORK_NAME" && ! -L "$catalyst_framework/$FRAMEWORK_NAME" ]]; then
-+  mv "$catalyst_framework/$FRAMEWORK_NAME" "$catalyst_framework/Versions/A/$FRAMEWORK_NAME"
-+  ln -s "Versions/Current/$FRAMEWORK_NAME" "$catalyst_framework/$FRAMEWORK_NAME"
-+fi
++# A Catalyst framework is a versioned bundle; lipo replaced its top-level symlink with a file.
+ cd "$OUT_DIR/$FRAMEWORK_NAME.xcframework/ios-arm64_x86_64-maccatalyst/$FRAMEWORK_NAME.framework/"
+ mv "$FRAMEWORK_NAME" "Versions/A/$FRAMEWORK_NAME"
+ ln -s "Versions/Current/$FRAMEWORK_NAME" "$FRAMEWORK_NAME"
  
 +# honeycomb (D82): a normalised zip (fixed times, sorted entries, no extra attributes), so two
 +# builds of the same input can be compared byte for byte. xcodebuild -create-xcframework lists the
