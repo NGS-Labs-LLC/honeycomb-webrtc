@@ -46,6 +46,10 @@ fi
 depot_tools_commit=$(git -C "$src/depot_tools" rev-parse HEAD)
 say "depot_tools at $depot_tools_commit"
 export DEPOT_TOOLS_UPDATE=0
+# The Catalyst slice builds against upstream's Xcode (PINS); xcframework.sh reads this.
+export CATALYST_DEVELOPER_DIR=/Applications/Xcode_${CATALYST_XCODE_VERSION}.app/Contents/Developer
+[ -d "$CATALYST_DEVELOPER_DIR" ] || fail "no Xcode $CATALYST_XCODE_VERSION at $CATALYST_DEVELOPER_DIR for the Catalyst slice"
+say "Catalyst slice with $(DEVELOPER_DIR=$CATALYST_DEVELOPER_DIR xcodebuild -version | tr '\n' ' ')"
 # With updates off, depot_tools never bootstraps its own Python (python3_bin_reldir.txt), which
 # gn and ninja's wrappers need; ensure_bootstrap does that without moving the checkout.
 (cd "$src/depot_tools" && ./ensure_bootstrap)
@@ -81,7 +85,7 @@ catalyst=$xcf/ios-arm64-maccatalyst/LiveKitWebRTC.framework
 [ -L "$catalyst/LiveKitWebRTC" ] && [ -f "$catalyst/Versions/A/LiveKitWebRTC" ] || fail "$catalyst is not a versioned bundle"
 build_info=$(xcrun vtool -show-build "$catalyst/Versions/A/LiveKitWebRTC") || fail "vtool could not read the Catalyst binary"
 grep -q 'platform MACCATALYST' <<<"$build_info" || fail "the Catalyst slice is not built for Mac Catalyst"
-grep -q 'minos 26.0' <<<"$build_info" || fail "the Catalyst slice's minimum is not 26.0"
+grep -q 'minos 14.0' <<<"$build_info" || fail "the Catalyst slice's minimum is not 14.0"
 [ "$(lipo -archs "$catalyst/Versions/A/LiveKitWebRTC")" = "arm64" ] || fail "the Catalyst slice is not arm64 only"
 say "ios-arm64-maccatalyst: a versioned bundle, platform MACCATALYST, arm64"
 
@@ -98,6 +102,7 @@ done) > "$out/MANIFEST.sha256"
 	echo "PATCH_SHA256=$($sha256 "$patchfile" | cut -d' ' -f1)"
 	echo "RUNNER_IMAGE=${ImageOS:-?} ${ImageVersion:-?}"
 	echo "XCODE=$(xcodebuild -version | tr '\n' ' ')"
+	echo "CATALYST_XCODE=$(DEVELOPER_DIR=$CATALYST_DEVELOPER_DIR xcodebuild -version | tr '\n' ' ')"
 	echo "BUILD_MINUTES=$minutes"
 	echo "RUN=${GITHUB_SERVER_URL:-}/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-local}"
 	echo "ZIP_SHA256=$($sha256 "$zip" | cut -d' ' -f1)"

@@ -11,3 +11,6 @@ DEPOT_TOOLS_REPO=https://chromium.googlesource.com/chromium/tools/depot_tools.gi
 # Recorded by the first green build (run 5, 2026-10-23).
 DEPOT_TOOLS_COMMIT=4be4e4628e093c4ad50210db5dcfa05a88280bda
 XCODE_VERSION=26.6
+# The Mac Catalyst slice only: upstream's Xcode for this webrtc-build tag. The macOS 26.5 SDK in
+# Xcode 26.6 has system stubs with no Catalyst target, which lld refuses to link.
+CATALYST_XCODE_VERSION=26.0

@@ -1,20 +1,21 @@
 # Release `build-2`: Mac Catalyst
 
 `build-1` plus a third slice, **Mac Catalyst arm64** (`ios-arm64-maccatalyst`), for the
-honeycomb-ios Mac app (Phase 5; Paul chose Catalyst on 2026-10-25). The pins are unchanged. The
-patch keeps upstream's `catalyst-arm64` platform with upstream's GN arguments, except the
-deployment target. That is 26.0 (the app's minimum), not upstream's 14.0. The first CI run
-showed that at 14.0 the macOS 26.5 SDK's newer system libraries (`libsystem_eligibility`,
-`libsystem_sanitizers`, `libsystem_trial`) refuse to link: "incompatible with arm64
-(macCatalyst14.0.0)". At 26.0, the second run then stopped on a deprecation that only Catalyst
-reports (`RTCFileVideoCapturer`'s `tracksWithMediaType:`, deprecated since macCatalyst 18), under
-upstream's `treat_warnings_as_errors`. That is off for the Catalyst slice only: the iOS slices keep
-upstream's arguments exactly, so they can still be compared with `build-1`. The iOS slices are built from the same inputs as `build-1`, so they should
-match it.
+honeycomb-ios Mac app (Phase 5; Paul chose Catalyst on 2026-10-25). The patch keeps upstream's
+`catalyst-arm64` platform and its GN arguments unchanged.
+
+**One difference, the SDK:** the Catalyst slice links against **Xcode 26.0**, which is upstream's
+Xcode for this tag (`CATALYST_XCODE_VERSION` in `PINS`). The iOS slices stay on Xcode 26.6, so
+they should match `build-1`.
+- **Why:** with Xcode 26.6, the macOS 26.5 SDK's `libsystem_eligibility`, `libsystem_sanitizers`
+  and `libsystem_trial` stubs list no Catalyst target, and lld refuses them. The error is
+  "incompatible with arm64 (macCatalyst14.0.0)", and the same at 26.0.
+- **What it isn't:** the first two CI runs tried a higher deployment target, then
+  warnings-not-errors. Neither was the cause, so both are reverted.
 
 `build.sh` also checks the new slice:
 - it is a versioned bundle (`LiveKitWebRTC` → `Versions/Current/LiveKitWebRTC`);
-- `vtool` reports `platform MACCATALYST` and `minos 26.0`;
+- `vtool` reports `platform MACCATALYST` and `minos 14.0`;
 - it is arm64 only.
 
 Intel Macs aren't built: Paul's MacBook and CI's runners are Apple silicon. Adding
