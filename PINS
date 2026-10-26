@@ -1,0 +1,16 @@
+# Inputs of the WebRTC build (honeycomb-ios D82, docs/design/AES-256-FRAMES.md). Every value is exact.
+# Changing one means a new BUILD-RECORD and new checksums; changing WEBRTC_BUILD_COMMIT also
+# means re-deriving patches/ against the new scripts (build.sh refuses otherwise).
+WEBRTC_REPO=https://github.com/webrtc-sdk/webrtc.git
+# m150_release head on 2026-10-22: the first revision whose key provider has keySize.
+WEBRTC_COMMIT=a545de45259b47dfac5f3635863e47cb601f1bb2
+WEBRTC_BUILD_REPO=https://github.com/webrtc-sdk/webrtc-build.git
+# Tag m150.7871.04: upstream's build of the same WebRTC commit.
+WEBRTC_BUILD_COMMIT=717ec1dc5a94389d691e09cccaf3d7b3364fb4b7
+DEPOT_TOOLS_REPO=https://chromium.googlesource.com/chromium/tools/depot_tools.git
+# Recorded by the first green build (run 5, 2026-10-23).
+DEPOT_TOOLS_COMMIT=4be4e4628e093c4ad50210db5dcfa05a88280bda
+XCODE_VERSION=26.6
+# The Mac Catalyst slice only: upstream's Xcode for this webrtc-build tag. The macOS 26.5 SDK in
+# Xcode 26.6 has system stubs with no Catalyst target, which lld refuses to link.
+CATALYST_XCODE_VERSION=26.0
