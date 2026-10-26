@@ -5,7 +5,8 @@ This repository builds WebRTC for the Honeycomb Hive iOS app from
 [webrtc-sdk](https://github.com/webrtc-sdk/webrtc) `m150_release` at a pinned commit. That
 commit is the first whose frame-encryption key provider accepts `keySize: 256`, which gives
 AES-256-GCM media frames (`hive-frame/2`). The framework is `LiveKitWebRTC.xcframework`,
-prefixed `LKRTC` and built for iOS arm64 devices and the arm64 simulator. The app's 1:1 calls
+prefixed `LKRTC` and built for iOS arm64 devices, the simulator and Mac Catalyst (the Mac
+app), the last two for both arm64 and x86_64. The app's 1:1 calls
 and LiveKit's Swift SDK share it. The design is honeycomb-ios `docs/design/AES-256-FRAMES.md`
 (D82).
 
@@ -38,7 +39,7 @@ compares the two results.
 |---|---|
 | `PINS` | Every input, exact: the webrtc-sdk commit, the [webrtc-build](https://github.com/webrtc-sdk/webrtc-build) commit whose scripts build it, depot_tools, Xcode |
 | `patches/UPSTREAM.sha256` | sha256 of the webrtc-build files used. `build.sh` refuses if any differs |
-| `patches/webrtc-build-m150.7871.04.patch` | The one patch, to webrtc-build's `xcframework.sh`. It builds two slices instead of eleven and writes a normalised zip. GN arguments are upstream's. Nothing in WebRTC itself is patched beyond upstream's own `apple_prefix.patch` |
+| `patches/webrtc-build-m150.7871.04.patch` | The one patch, to webrtc-build's `xcframework.sh`. It builds five platforms instead of eleven, made into three slices (iOS arm64 device; iOS simulator and Mac Catalyst, each arm64 + x86_64) and writes a normalised zip. GN arguments are upstream's. Nothing in WebRTC itself is patched beyond upstream's own `apple_prefix.patch` |
 | `build.sh` | Fetches the pins, checks them, applies the patch, builds, checks the output (`keySize`, every class prefixed), and writes `BUILD-RECORD` |
 
 ## What comes out
@@ -59,8 +60,9 @@ release whose notes carry each asset's sha256 and the full `BUILD-RECORD`.
 
 | Release | Asset | sha256 |
 |---|---|---|
-| `build-1` (to be tagged after the build PR merges; CI run [39972294655](https://github.com/NGS-Labs-LLC/honeycomb-webrtc/actions/runs/39972294655) built it twice, identical) | `LiveKitWebRTC.xcframework.zip` | `660396f289a4bb73588b15bc976aacecbb2ef425ae2f17bfe24c80603eefc5b6` |
-| | `BUILD-RECORD`, `MANIFEST.sha256` | in the release notes (the record names its own run) |
+| `build-1`: iOS arm64 device and arm64 simulator ([release](https://github.com/NGS-Labs-LLC/honeycomb-webrtc/releases/tag/build-1)) | `LiveKitWebRTC.xcframework.zip` | `660396f289a4bb73588b15bc976aacecbb2ef425ae2f17bfe24c80603eefc5b6` |
+| `build-2`: adds x86_64 to the simulator, and Mac Catalyst arm64 + x86_64 ([release](https://github.com/NGS-Labs-LLC/honeycomb-webrtc/releases/tag/build-2)) | `LiveKitWebRTC.xcframework.zip` | `a7d1743fdf50e003f664fa146835d0528b7772235684eafa75465e327539ecd4` |
+| | `BUILD-RECORD`, `MANIFEST.sha256` | in each release's notes (the record names its own run) |
 
 Each release's notes list the sha256 of **every asset**: `LiveKitWebRTC.xcframework.zip`,
 `BUILD-RECORD` and `MANIFEST.sha256` (the sha256 of every file inside the framework). Each release adds a row here. The zip's sha256 is the checksum SwiftPM checks in
@@ -72,10 +74,13 @@ shasum -a 256 LiveKitWebRTC.xcframework.zip BUILD-RECORD MANIFEST.sha256   # equ
 
 ## Using it with SwiftPM
 
-`Package.swift` exposes the product `LiveKitWebRTC` as a binary target pinned to release
-`build-1` by URL and checksum. The version tag `150.7871.4-hc.1` marks that manifest, so
-honeycomb-ios's fork of client-sdk-swift depends on it with
-`.package(url: "https://github.com/NGS-Labs-LLC/honeycomb-webrtc.git", exact: "150.7871.4-hc.1")`.
+`Package.swift` exposes the product `LiveKitWebRTC` as a binary target pinned to a release by
+URL and checksum, for iOS 13 and Mac Catalyst 14. Each version tag marks one manifest:
+- `150.7871.4-hc.1`: release `build-1`;
+- `150.7871.4-hc.2`: release `build-2`.
+
+honeycomb-ios's fork of client-sdk-swift depends on one exactly, for example
+`.package(url: "https://github.com/NGS-Labs-LLC/honeycomb-webrtc.git", exact: "150.7871.4-hc.2")`.
 A new build gets a new release, a new checksum here and a new `-hc.N` tag.
 
 ## Rules
