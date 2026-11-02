@@ -1,5 +1,5 @@
 # honeycomb-webrtc
-unmodified build or a one-patch fork for Honeycomb Hive
+WebRTC for Honeycomb Hive: upstream's build with two small patches
 
 This repository builds WebRTC for the Honeycomb Hive iOS app from
 [webrtc-sdk](https://github.com/webrtc-sdk/webrtc) `m150_release` at a pinned commit. That
@@ -17,13 +17,13 @@ and LiveKit's Swift SDK share it. The design is honeycomb-ios `docs/design/AES-2
 | WebRTC source | [webrtc-sdk/webrtc](https://github.com/webrtc-sdk/webrtc) `a545de45259b47dfac5f3635863e47cb601f1bb2` (`m150_release`, 2026-10-22) |
 | Build scripts | [webrtc-sdk/webrtc-build](https://github.com/webrtc-sdk/webrtc-build) `717ec1dc5a94389d691e09cccaf3d7b3364fb4b7` (tag `m150.7871.04`, upstream's build of the same commit) |
 | depot_tools | `4be4e4628e093c4ad50210db5dcfa05a88280bda` (HEAD at the first green build, 2026-10-23) |
-| Xcode | 26.6 |
+| Xcode | 26.6, build `17F113`; the Catalyst slice 26.0.1, build `17A400` (`Xcode_26.0.app`) |
 
 `PINS` is the source of truth. This table follows it.
 
 ## Build command
 
-On macOS with Xcode at the version in `PINS`, from a clean checkout:
+On macOS with Xcode at the version and build number in `PINS`, from a clean checkout:
 
 ```sh
 ./build.sh                  # writes out/LiveKitWebRTC.xcframework.zip and out/BUILD-RECORD
@@ -37,30 +37,41 @@ compares the two results.
 
 | File | What it is |
 |---|---|
-| `PINS` | Every input, exact: the webrtc-sdk commit, the [webrtc-build](https://github.com/webrtc-sdk/webrtc-build) commit whose scripts build it, depot_tools, Xcode |
+| `PINS` | Every input, exact and required: the webrtc-sdk commit, the [webrtc-build](https://github.com/webrtc-sdk/webrtc-build) commit whose scripts build it, depot_tools, and Xcode by version and build number |
 | `patches/UPSTREAM.sha256` | sha256 of the webrtc-build files used. `build.sh` refuses if any differs |
-| `patches/webrtc-build-m150.7871.04.patch` | The one patch, to webrtc-build's `xcframework.sh`. It builds five platforms instead of eleven, made into three slices (iOS arm64 device; iOS simulator and Mac Catalyst, each arm64 + x86_64) and writes a normalised zip. GN arguments are upstream's. Nothing in WebRTC itself is patched beyond upstream's own `apple_prefix.patch` |
-| `build.sh` | Fetches the pins, checks them, applies the patch, builds, checks the output (`keySize`, every class prefixed), and writes `BUILD-RECORD` |
+| `patches/webrtc-build-m150.7871.04.patch` | The build-script patch, to webrtc-build's `xcframework.sh` and `run.py`. It builds five platforms instead of eleven, made into three slices (iOS arm64 device; iOS simulator and Mac Catalyst, each arm64 + x86_64), writes a normalised zip, and adds `run.py`'s hook for the WebRTC source patch after upstream's own `apple_prefix.patch`. GN arguments are upstream's |
+| `patches/webrtc-a545de4.patch` | The WebRTC source patch (since `build-3`), five files: the receiver's frame replay check in the frame cryptor (SEC PR-01; hive-node wire-protocol.md 6.6 "Replay", D-075) and the RTP audio-level header extensions removed from parsed descriptions at session and media level, from what the voice engine offers, and from what an audio stream sends (SEC WEBRTC-01). Nothing else in WebRTC is patched beyond upstream's `apple_prefix.patch` |
+| `patches/WEBRTC-UPSTREAM.sha256`, `WEBRTC-PATCHED.sha256` | sha256 of the WebRTC files the source patch touches, before and after it. `patches/apply-webrtc-patch.sh` refuses if either differs; `build.sh` checks the built tree against the second again |
+| `tests/` | The replay check against hive-node's `frame_replay` vectors (`frame_replay.vectors`, extracted by `extract-frame-replay.py`) and its bounds. CI runs it on Linux in minutes, on the patched upstream files |
+| `build.sh` | Checks every pin is set and both Xcode build numbers, fetches the pins, checks them, applies both patches, builds, checks the output (`keySize`, every class prefixed, the patched files), and writes `BUILD-RECORD` and `RESOLVED` |
 
 ## What comes out
 
 `BUILD-RECORD` lists:
+- the pipeline commit it was built from (`COMMIT`);
 - every pin;
-- the runner image and Xcode build;
-- the patch's sha256;
+- the runner image and both Xcode builds;
+- both patches' sha256 and the upstream files checked before them;
+- the resolved dependency set (`gclient revinfo --actual`, also the `RESOLVED` asset) and its sha256;
 - the zip's sha256 and size;
 - each slice's sha256 and the key-provider header's sha256;
 - the GN arguments;
 - the build time and the CI run.
 
 CI builds twice on fresh runners and compares the two records. A tag `build-*` publishes a
-release whose notes carry each asset's sha256 and the full `BUILD-RECORD`.
+release once that comparison has run and the record's pins match `PINS` at the tag; its notes
+carry each asset's sha256, the comparison's verdict with both builds' hashes (`COMPARE`), and the
+full `BUILD-RECORD`. The comparison is recorded, not yet a gate (D82 3.5).
+
+The workflow runs on pull requests that change the pipeline (`PINS`, `build.sh`, `patches/`,
+`tests/`, the workflow), on a manual dispatch, and on a `build-*` tag. Only the tag publishes.
 
 ## Releases and their sha256
 
 | Release | Asset | sha256 |
 |---|---|---|
-| (none yet; the first is `build-1` once the build PR merges) | | |
+| `build-1`, `build-2` | see `releases/build-1.md`, `releases/build-2.md` and each release's notes | |
+| `build-3` | the WebRTC source patch (PR-01, WEBRTC-01); see `releases/build-3.md` | once tagged |
 
 Each release's notes list the sha256 of **every asset**: `LiveKitWebRTC.xcframework.zip`,
 `BUILD-RECORD` and `MANIFEST.sha256` (the sha256 of every file inside the framework). Each release adds a row here. The zip's sha256 is the checksum SwiftPM checks in

@@ -1,0 +1,340 @@
+honeycomb-webrtc patch to WebRTC (webrtc-sdk/webrtc a545de45259b47dfac5f3635863e47cb601f1bb2), D82.
+Applied by patches/apply-webrtc-patch.sh in the WebRTC source tree after upstream's
+apple_prefix.patch, refused unless every file matches WEBRTC-UPSTREAM.sha256 before and
+WEBRTC-PATCHED.sha256 after. Re-derive on every WebRTC commit upgrade.
+
+1. SEC PR-01, frame replay (hive-node wire-protocol.md 6.6 "Replay", D-075). A frame that
+   decrypts plays only if its IV is new for the key it decrypted under: per key and IV ssrc,
+   the newest IV timestamp and the IVs within 2 s of the codec clock behind it
+   (api/crypto/frame_replay_guard.h, checked against hive-node's frame_replay vectors by
+   tests/frame_replay_guard_test.cc). The state lives on the key set: a new key starts empty;
+   setting the key a slot already holds keeps it.
+2. SEC WEBRTC-01, the RTP audio-level header extensions (ssrc-audio-level, csrc-audio-level),
+   which travel outside the frame encryption (wire-protocol.md 6.6): dropped from every parsed
+   description at session level and in media sections (api/webrtc_sdp.cc), never offered or
+   answered (the voice engine lists ssrc-audio-level as stopped), and never sent whatever was
+   negotiated (the audio send channel's extension filter).
+
+--- a/api/crypto/BUILD.gn
++++ b/api/crypto/BUILD.gn
+@@ -21,6 +21,7 @@ rtc_library("frame_crypto_transformer") {
+   sources = [
+     "frame_crypto_transformer.cc",
+     "frame_crypto_transformer.h",
++    "frame_replay_guard.h",
+   ]
+ 
+   deps = [
+--- a/api/crypto/frame_crypto_transformer.cc
++++ b/api/crypto/frame_crypto_transformer.cc
+@@ -826,6 +826,24 @@ void FrameCryptorTransformer::decryptFrame(
+     return;
+   }
+ 
++  // honeycomb (SEC PR-01; hive-node wire-protocol.md 6.6 "Replay"): a frame
++  // that decrypted is played only if its IV is new for the key it decrypted
++  // under. The IV is authenticated; the RTP timestamp, which the SFU
++  // rewrites, is not read.
++  auto replay_key_set = key_handler->GetKeySet(key_index);
++  if (replay_key_set == nullptr ||
++      !replay_key_set->AcceptReplay(
++          std::span<const uint8_t>(iv),
++          type_ == webrtc::FrameCryptorTransformer::MediaType::kAudioFrame
++              ? FrameReplayGuard::kAudioWindowTicks
++              : FrameReplayGuard::kVideoWindowTicks,
++          webrtc::TimeMillis())) {
++    RTC_LOG(LS_VERBOSE) << "FrameCryptorTransformer::decryptFrame() dropping "
++                           "a replayed frame for participant "
++                        << participant_id_;
++    return;
++  }
++
+   webrtc::Buffer payload(buffer.data(), buffer.size());
+   webrtc::Buffer data_out;
+   data_out.AppendData(frame_header);
+--- a/api/crypto/frame_crypto_transformer.h
++++ b/api/crypto/frame_crypto_transformer.h
+@@ -19,6 +19,7 @@
+ 
+ #include <unordered_map>
+ 
++#include "api/crypto/frame_replay_guard.h"
+ #include "api/frame_transformer_interface.h"
+ #include "api/make_ref_counted.h"
+ #include "api/rtc_error.h"
+@@ -118,6 +119,20 @@ class ParticipantKeyHandler : public webrtc::RefCountInterface {
+     std::vector<uint8_t> encryption_key;
+     KeySet(std::vector<uint8_t> material, std::vector<uint8_t> encryptionKey)
+         : material(material), encryption_key(encryptionKey) {}
++
++    // honeycomb (SEC PR-01): the replay state belongs to the key, so a new
++    // key starts empty and the state goes when the key is dropped. Called
++    // only for a frame that decrypted under this key.
++    bool AcceptReplay(std::span<const uint8_t> iv,
++                      uint32_t window_ticks,
++                      int64_t now_ms) {
++      webrtc::MutexLock lock(&replay_mutex_);
++      return replay_guard_.Accept(iv, window_ticks, now_ms);
++    }
++
++   private:
++    webrtc::Mutex replay_mutex_;
++    FrameReplayGuard replay_guard_;
+   };
+ 
+  public:
+@@ -213,6 +228,12 @@ class ParticipantKeyHandler : public webrtc::RefCountInterface {
+     if (key_index >= 0) {
+       current_key_index_ = key_index % crypto_key_ring_.size();
+     }
++    // honeycomb (SEC PR-01): setting the key a slot already holds keeps that
++    // key, and with it its replay state; only a new key starts empty.
++    if (crypto_key_ring_[current_key_index_] &&
++        crypto_key_ring_[current_key_index_]->material == password) {
++      return;
++    }
+     crypto_key_ring_[current_key_index_] =
+         DeriveKeys(password, key_provider_->options().ratchet_salt,
+                    key_provider_->options().frame_key_bits());
+--- /dev/null
++++ b/api/crypto/frame_replay_guard.h
+@@ -0,0 +1,155 @@
++/*
++ * honeycomb-webrtc patch (SEC PR-01; hive-node wire-protocol.md 6.6 "Replay",
++ * D-075). Licensed under the Apache License, Version 2.0, as the file next to it.
++ */
++
++#ifndef API_CRYPTO_FRAME_REPLAY_GUARD_H_
++#define API_CRYPTO_FRAME_REPLAY_GUARD_H_
++
++#include <stddef.h>
++#include <stdint.h>
++
++#include <algorithm>
++#include <span>
++#include <vector>
++
++namespace webrtc {
++
++// A receiver's frame replay check for one frame key. GCM proves a frame came
++// from the key's holder, not that it is new, and an SFU can send an earlier
++// frame again under fresh RTP sequence numbers. After a frame decrypts, its
++// IV's ssrc (bytes 0-3) and timestamp (bytes 4-7) are read; per ssrc the guard
++// keeps the newest timestamp N (serial arithmetic mod 2^32, RFC 1982) and the
++// IVs within the window behind N, and refuses a frame whose IV it holds or
++// whose timestamp is more than the window behind N. The IV is authenticated by
++// GCM; the RTP header's timestamp, which the SFU rewrites, is never read.
++//
++// Bounds: at most kMaxSsrcs ssrcs (a new one replaces the one heard from
++// longest ago) and, per ssrc, the IVs within the window. An ssrc whose every
++// frame has been refused as window-behind for kResetAfterMs is reset, so a
++// sender whose own timestamp jumps back does not go silent.
++//
++// Not thread-safe; the owner holds a lock.
++class FrameReplayGuard {
++ public:
++  // 2 s of the codec's RTP clock.
++  static constexpr uint32_t kAudioWindowTicks = 96000;   // 48 kHz
++  static constexpr uint32_t kVideoWindowTicks = 180000;  // 90 kHz
++  static constexpr size_t kMaxSsrcs = 16;
++  static constexpr int64_t kResetAfterMs = 2000;
++  static constexpr size_t kIvSize = 12;
++
++  // `iv` is the 12-byte IV of a frame that decrypted under this guard's key.
++  // Returns true when the frame plays, false when it is refused (an IV of
++  // another length is refused).
++  bool Accept(std::span<const uint8_t> iv,
++              uint32_t window_ticks,
++              int64_t now_ms) {
++    if (iv.size() != kIvSize) {
++      return false;
++    }
++    const uint32_t ssrc = Read32(iv, 0);
++    const uint32_t ts = Read32(iv, 4);
++    const uint32_t tail = Read32(iv, 8);
++    ++clock_;
++    Stream* stream = Find(ssrc);
++    if (stream == nullptr) {
++      if (streams_.size() >= kMaxSsrcs) {
++        streams_.erase(std::min_element(
++            streams_.begin(), streams_.end(),
++            [](const Stream& a, const Stream& b) {
++              return a.last_heard < b.last_heard;
++            }));
++      }
++      streams_.push_back(Start(ssrc, ts, tail));
++      return true;
++    }
++    stream->last_heard = clock_;
++    if (Behind(stream->newest, ts) > window_ticks) {
++      if (!stream->behind) {
++        stream->behind = true;
++        stream->behind_since_ms = now_ms;
++        return false;
++      }
++      if (now_ms - stream->behind_since_ms < kResetAfterMs) {
++        return false;
++      }
++      *stream = Start(ssrc, ts, tail);
++      return true;
++    }
++    stream->behind = false;
++    for (const Seen& seen : stream->seen) {
++      if (seen.ts == ts && seen.tail == tail) {
++        return false;
++      }
++    }
++    if (Behind(stream->newest, ts) == 0) {
++      stream->newest = ts;
++    }
++    stream->seen.push_back(Seen{ts, tail});
++    const uint32_t newest = stream->newest;
++    stream->seen.erase(
++        std::remove_if(stream->seen.begin(), stream->seen.end(),
++                       [newest, window_ticks](const Seen& seen) {
++                         return Behind(newest, seen.ts) > window_ticks;
++                       }),
++        stream->seen.end());
++    return true;
++  }
++
++  size_t ssrc_count() const { return streams_.size(); }
++
++  size_t remembered(uint32_t ssrc) const {
++    for (const Stream& stream : streams_) {
++      if (stream.ssrc == ssrc) {
++        return stream.seen.size();
++      }
++    }
++    return 0;
++  }
++
++  // How far `ts` is behind `newest` modulo 2^32, or 0 when it is not behind.
++  static uint32_t Behind(uint32_t newest, uint32_t ts) {
++    const uint32_t d = newest - ts;
++    return d >= 0x80000000u ? 0 : d;
++  }
++
++ private:
++  struct Seen {
++    uint32_t ts;
++    uint32_t tail;  // IV bytes 8-11
++  };
++  struct Stream {
++    uint32_t ssrc;
++    uint32_t newest;
++    std::vector<Seen> seen;
++    uint64_t last_heard;
++    bool behind;
++    int64_t behind_since_ms;
++  };
++
++  static uint32_t Read32(std::span<const uint8_t> iv, size_t at) {
++    return (uint32_t{iv[at]} << 24) | (uint32_t{iv[at + 1]} << 16) |
++           (uint32_t{iv[at + 2]} << 8) | uint32_t{iv[at + 3]};
++  }
++
++  Stream Start(uint32_t ssrc, uint32_t ts, uint32_t tail) const {
++    return Stream{ssrc, ts, {Seen{ts, tail}}, clock_, false, 0};
++  }
++
++  Stream* Find(uint32_t ssrc) {
++    for (Stream& stream : streams_) {
++      if (stream.ssrc == ssrc) {
++        return &stream;
++      }
++    }
++    return nullptr;
++  }
++
++  std::vector<Stream> streams_;
++  uint64_t clock_ = 0;
++};
++
++}  // namespace webrtc
++
++#endif  // API_CRYPTO_FRAME_REPLAY_GUARD_H_
+--- a/api/webrtc_sdp.cc
++++ b/api/webrtc_sdp.cc
+@@ -757,6 +757,15 @@ void WriteSctpInit(const std::vector<uint8_t>& cookie, StringBuilder* os) {
+   *os << kSdpDelimiterColon << Base64Encode(cookie);
+ }
+ 
++// honeycomb (SEC WEBRTC-01; hive-node wire-protocol.md 6.6): the RTP
++// audio-level header extensions travel outside the frame encryption and would
++// tell the SFU who speaks when, so they are dropped from every parsed
++// description, at session level as well as in media sections.
++bool IsStrippedAudioLevelExtension(absl::string_view uri) {
++  return uri == RtpExtension::kAudioLevelUri ||
++         uri == RtpExtension::kCsrcAudioLevelsUri;
++}
++
+ bool ParseExtmap(absl::string_view line,
+                  RtpExtension* extmap,
+                  SdpParseError* error) {
+@@ -1819,7 +1828,9 @@ bool ParseSessionDescription(absl::string_view message,
+       if (!ParseExtmap(*aline, &extmap, error)) {
+         return false;
+       }
+-      session_extmaps->push_back(extmap);
++      if (!IsStrippedAudioLevelExtension(extmap.uri)) {
++        session_extmaps->push_back(extmap);
++      }
+     } else if (HasAttribute(*aline, kAttributeCryptex)) {
+       desc->set_cryptex(true);
+     }
+@@ -2818,7 +2829,9 @@ bool ParseContent(absl::string_view message,
+         if (!ParseExtmap(*line, &extmap, error)) {
+           return false;
+         }
+-        media_desc->AddRtpHeaderExtension(extmap);
++        if (!IsStrippedAudioLevelExtension(extmap.uri)) {
++          media_desc->AddRtpHeaderExtension(extmap);
++        }
+       } else if (HasAttribute(*line, kAttributeXGoogleFlag)) {
+         // Experimental attribute.  Conference mode activates more aggressive
+         // AEC and NS settings.
+--- a/media/engine/webrtc_voice_engine.cc
++++ b/media/engine/webrtc_voice_engine.cc
+@@ -142,6 +142,15 @@ class ProxySink : public AudioSinkInterface {
+   AudioSinkInterface* sink_;
+ };
+ 
++// honeycomb (SEC WEBRTC-01; hive-node wire-protocol.md 6.6): the audio-level
++// header extensions travel outside the frame encryption, so an audio stream
++// never sends them, whatever the remote description negotiated.
++bool IsSupportedForHoneycombAudio(absl::string_view uri) {
++  return uri != RtpExtension::kAudioLevelUri &&
++         uri != RtpExtension::kCsrcAudioLevelsUri &&
++         RtpExtension::IsSupportedForAudio(uri);
++}
++
+ bool ValidateStreamParams(const StreamParams& sp) {
+   if (sp.ssrcs.empty()) {
+     RTC_DLOG(LS_ERROR) << "No SSRCs in stream parameters: " << sp.ToString();
+@@ -670,12 +679,14 @@ WebRtcVoiceEngine::GetRtpHeaderExtensions(
+   // id is *not* incremented for non-default extensions. Conflicting IDs
+   // need to be resolved.
+   int id = 1;
++  // honeycomb (SEC WEBRTC-01): audio level is never offered or answered.
+   for (const auto& uri :
+-       {RtpExtension::kAudioLevelUri, RtpExtension::kAbsSendTimeUri,
++       {RtpExtension::kAbsSendTimeUri,
+         RtpExtension::kTransportSequenceNumberUri, RtpExtension::kMidUri}) {
+     result.emplace_back(uri, id++, RtpTransceiverDirection::kSendRecv);
+   }
+-  for (const auto& uri : {RtpExtension::kAbsoluteCaptureTimeUri}) {
++  for (const auto& uri : {RtpExtension::kAbsoluteCaptureTimeUri,
++                          RtpExtension::kAudioLevelUri}) {
+     result.emplace_back(uri, id, RtpTransceiverDirection::kStopped);
+   }
+   return result;
+@@ -1292,7 +1303,7 @@ bool WebRtcVoiceSendChannel::SetSenderParameters(
+   }
+ 
+   std::vector<RtpExtension> filtered_extensions =
+-      FilterRtpExtensions(params.extensions, RtpExtension::IsSupportedForAudio,
++      FilterRtpExtensions(params.extensions, IsSupportedForHoneycombAudio,
+                           true, env_.field_trials());
+   if (send_rtp_extensions_ != filtered_extensions) {
+     send_rtp_extensions_.swap(filtered_extensions);

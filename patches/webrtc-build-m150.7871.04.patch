@@ -9,6 +9,10 @@ xcframework's Info.plist listing its slices in a fixed order. GN arguments are
 upstream's. The Catalyst slice links against the SDK of Xcode 26.0 (upstream's Xcode), given
 by build.sh as CATALYST_DEVELOPER_DIR.
 
+build/run.py gains one step after upstream's own patches: when HONEYCOMB_WEBRTC_PATCH_STEP is
+set (build.sh sets it to patches/apply-webrtc-patch.sh), it runs that script on the WebRTC
+source tree, which applies patches/webrtc-a545de4.patch (SEC PR-01 and WEBRTC-01).
+
 build.sh checks every file in UPSTREAM.sha256 before applying this with `patch -p1` in
 the webrtc-build checkout. The other files listed there are used unpatched; they are checked so
 a different upstream cannot slip in under the same pin. Re-derive on every webrtc-build upgrade.
@@ -128,3 +132,18 @@ a different upstream cannot slip in under the same pin. Re-derive on every webrt
  
  end_group
  
+--- a/build/run.py
++++ b/build/run.py
+@@ -358,6 +358,12 @@ def get_webrtc(source_dir, patch_dir, version, target,
+                 depth, dirs = PATCH_INFO.get(patch, (1, ['.']))
+                 dir = os.path.join(src_dir, *dirs)
+                 apply_patch(os.path.join(patch_dir, patch), dir, depth)
++            # honeycomb (D82; SEC PR-01, WEBRTC-01): honeycomb-webrtc's WebRTC source patch, by
++            # its own script, which refuses unless every file it touches matches a sha256 before
++            # and after. build.sh sets the variable and checks the patched files again after the build.
++            honeycomb_step = os.environ.get('HONEYCOMB_WEBRTC_PATCH_STEP')
++            if honeycomb_step:
++                cmd([honeycomb_step, src_dir])
+ 
+ 
+ def git_get_url_and_revision(dir):
