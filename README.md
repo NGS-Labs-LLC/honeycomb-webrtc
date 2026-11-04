@@ -72,6 +72,7 @@ The workflow runs on pull requests that change the pipeline (`PINS`, `build.sh`,
 |---|---|---|
 | `build-1`, `build-2` | see `releases/build-1.md`, `releases/build-2.md` and each release's notes | |
 | `build-3` | the WebRTC source patch (PR-01, WEBRTC-01); see `releases/build-3.md` | once tagged |
+| `build-4` | planned, not built: the list is `releases/build-4.md` (first item: the key index a frame decrypted under, for honeycomb-ios D156) | |
 
 Each release's notes list the sha256 of **every asset**: `LiveKitWebRTC.xcframework.zip`,
 `BUILD-RECORD` and `MANIFEST.sha256` (the sha256 of every file inside the framework). Each release adds a row here. The zip's sha256 is the checksum SwiftPM checks in
