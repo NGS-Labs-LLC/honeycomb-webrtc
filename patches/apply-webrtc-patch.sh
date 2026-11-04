@@ -28,6 +28,6 @@ while read -r sum path; do
 	grep -q "  $path\$" "$here/WEBRTC-UPSTREAM.sha256" || [ ! -e "$src/$path" ] || fail "$path already exists before the WebRTC patch"
 done < "$here/WEBRTC-PATCHED.sha256"
 patch -p1 -N -s -d "$src" < "$patchfile" || fail "$(basename "$patchfile") does not apply"
-[ -z "$(cd "$src" && find api media -name '*.rej' -o -name '*.orig')" ] || fail "$(basename "$patchfile") left .rej or .orig files"
+[ -z "$(cd "$src" && find api media sdk -name '*.rej' -o -name '*.orig')" ] || fail "$(basename "$patchfile") left .rej or .orig files"
 check "$here/WEBRTC-PATCHED.sha256" "after the WebRTC patch"
 say "WebRTC source patched: $(basename "$patchfile") (sha256 $($sha256 "$patchfile" | cut -d' ' -f1))"

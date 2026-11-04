@@ -40,7 +40,7 @@ compares the two results.
 | `PINS` | Every input, exact and required: the webrtc-sdk commit, the [webrtc-build](https://github.com/webrtc-sdk/webrtc-build) commit whose scripts build it, depot_tools, and Xcode by version and build number |
 | `patches/UPSTREAM.sha256` | sha256 of the webrtc-build files used. `build.sh` refuses if any differs |
 | `patches/webrtc-build-m150.7871.04.patch` | The build-script patch, to webrtc-build's `xcframework.sh` and `run.py`. It builds five platforms instead of eleven, made into three slices (iOS arm64 device; iOS simulator and Mac Catalyst, each arm64 + x86_64), writes a normalised zip, and adds `run.py`'s hook for the WebRTC source patch after upstream's own `apple_prefix.patch`. GN arguments are upstream's |
-| `patches/webrtc-a545de4.patch` | The WebRTC source patch (since `build-3`), five files: the receiver's frame replay check in the frame cryptor (SEC PR-01; hive-node wire-protocol.md 6.6 "Replay", D-075) and the RTP audio-level header extensions removed from parsed descriptions at session and media level, from what the voice engine offers, and from what an audio stream sends (SEC WEBRTC-01). Nothing else in WebRTC is patched beyond upstream's `apple_prefix.patch` |
+| `patches/webrtc-a545de4.patch` | The WebRTC source patch (since `build-3`; changed in `build-4`), ten files: the receiver's frame replay check in the frame cryptor, which never resets while the key lives and retires evicted `ssrc`s (SEC PR-01; hive-node wire-protocol.md 6.6 "Replay", D-075, D-086), with its gtest file in `crypto_unittests`; the key index a played frame decrypted under, reported to the cryptor's observer and Objective-C delegate (honeycomb-ios D156); and the RTP audio-level header extensions removed from parsed descriptions at session and media level, from what the voice engine offers, and from what an audio stream sends (SEC WEBRTC-01). Nothing else in WebRTC is patched beyond upstream's `apple_prefix.patch` |
 | `patches/WEBRTC-UPSTREAM.sha256`, `WEBRTC-PATCHED.sha256` | sha256 of the WebRTC files the source patch touches, before and after it. `patches/apply-webrtc-patch.sh` refuses if either differs; `build.sh` checks the built tree against the second again |
 | `tests/` | The replay check against hive-node's `frame_replay` vectors (`frame_replay.vectors`, extracted by `extract-frame-replay.py`) and its bounds. CI runs it on Linux in minutes, on the patched upstream files |
 | `build.sh` | Checks every pin is set and both Xcode build numbers, fetches the pins, checks them, applies both patches, builds, checks the output (`keySize`, every class prefixed, the patched files), and writes `BUILD-RECORD` and `RESOLVED` |
@@ -71,8 +71,8 @@ The workflow runs on pull requests that change the pipeline (`PINS`, `build.sh`,
 | Release | Asset | sha256 |
 |---|---|---|
 | `build-1`, `build-2` | see `releases/build-1.md`, `releases/build-2.md` and each release's notes | |
-| `build-3` | the WebRTC source patch (PR-01, WEBRTC-01); see `releases/build-3.md` | once tagged |
-| `build-4` | planned, not built: the list is `releases/build-4.md` (first item: the key index a frame decrypted under, for honeycomb-ios D156) | |
+| `build-3` | the WebRTC source patch (PR-01, WEBRTC-01); see `releases/build-3.md` | `LiveKitWebRTC.xcframework.zip` `34fc6d2b82aa2b568af8751b6c08c650c5859013125af5b12c7001551d399a89` |
+| `build-4` | no replay reset while the key lives, retired `ssrc`s (D-086), the decrypted key index (D156); see `releases/build-4.md` | once tagged |
 
 Each release's notes list the sha256 of **every asset**: `LiveKitWebRTC.xcframework.zip`,
 `BUILD-RECORD` and `MANIFEST.sha256` (the sha256 of every file inside the framework). Each release adds a row here. The zip's sha256 is the checksum SwiftPM checks in

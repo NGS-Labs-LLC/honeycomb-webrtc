@@ -23,22 +23,32 @@ permissions:
 jobs:
   source-patch:
     # Minutes, on Linux: the WebRTC patch applies to the pinned commit with every hash as listed,
-    # and the replay guard it adds passes hive-node's frame_replay vectors.
-    name: WebRTC source patch and replay vectors
+    # the tests it adds pass (api/crypto/frame_replay_guard_unittest.cc: the bounds, no reset
+    # while the key lives, retired ssrcs, the key-index report), and the replay guard passes
+    # hive-node's frame_replay vectors.
+    name: WebRTC source patch, its tests and replay vectors
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Patch the pinned WebRTC files and run the replay guard test
+      - name: Install googletest
+        run: sudo apt-get install -y -q libgtest-dev
+      - name: Patch the pinned WebRTC files and run the patch's tests and the replay vectors
         run: |
           . ./PINS
           git init -q webrtc
-          git -C webrtc sparse-checkout set --no-cone /api/crypto/ /api/webrtc_sdp.cc /media/engine/webrtc_voice_engine.cc
+          git -C webrtc sparse-checkout set --no-cone /api/crypto/ /api/webrtc_sdp.cc /media/engine/webrtc_voice_engine.cc '/sdk/objc/api/peerconnection/RTCFrameCryptor*'
           git -C webrtc fetch -q --depth 1 --filter=blob:none "$WEBRTC_REPO" "$WEBRTC_COMMIT"
           git -C webrtc checkout -q FETCH_HEAD
           [ "$(git -C webrtc rev-parse HEAD)" = "$WEBRTC_COMMIT" ]
           patches/apply-webrtc-patch.sh "$PWD/webrtc"
+          # The patch's own gtest file, as WebRTC's crypto_unittests would build it; test/gtest.h
+          # is WebRTC's wrapper around googletest, so a one-line stand-in serves here.
+          mkdir -p shim/test && echo '#include <gtest/gtest.h>' > shim/test/gtest.h
+          g++ -std=c++20 -Wall -Wextra -Werror -I webrtc -I shim -o frame_replay_guard_unittest \
+            webrtc/api/crypto/frame_replay_guard_unittest.cc -lgtest -lgtest_main -pthread
+          ./frame_replay_guard_unittest
           g++ -std=c++20 -Wall -Wextra -Werror -I webrtc -o frame_replay_guard_test tests/frame_replay_guard_test.cc
           ./frame_replay_guard_test tests/frame_replay.vectors
 

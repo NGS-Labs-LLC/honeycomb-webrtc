@@ -100,6 +100,10 @@ xcf=$pkg/LiveKitWebRTC.xcframework
 # What the app relies on: the 256-bit key provider, exported, and every class prefixed.
 header=$(find "$xcf/ios-arm64/LiveKitWebRTC.framework/Headers" -name RTCFrameCryptorKeyProvider.h)
 grep -q "keySize:(int)keySize" "$header" || fail "RTCFrameCryptorKeyProvider.h has no keySize"
+# The key-index report (patch item 3, honeycomb-ios D156) is in the public header.
+cryptor_header=$(find "$xcf/ios-arm64/LiveKitWebRTC.framework/Headers" -name RTCFrameCryptor.h)
+grep -q "didDecryptFrameWithKeyIndex:(int)keyIndex" "$cryptor_header" \
+	|| fail "RTCFrameCryptor.h has no didDecryptFrameWithKeyIndex"
 # The symbol list is read in full before matching: grep -q stopping early would break nm's pipe,
 # and with pipefail that reads as a missing symbol.
 for bin in "$xcf"/*/LiveKitWebRTC.framework/LiveKitWebRTC; do

@@ -3,17 +3,26 @@ Applied by patches/apply-webrtc-patch.sh in the WebRTC source tree after upstrea
 apple_prefix.patch, refused unless every file matches WEBRTC-UPSTREAM.sha256 before and
 WEBRTC-PATCHED.sha256 after. Re-derive on every WebRTC commit upgrade.
 
-1. SEC PR-01, frame replay (hive-node wire-protocol.md 6.6 "Replay", D-075). A frame that
-   decrypts plays only if its IV is new for the key it decrypted under: per key and IV ssrc,
-   the newest IV timestamp and the IVs within 2 s of the codec clock behind it
-   (api/crypto/frame_replay_guard.h, checked against hive-node's frame_replay vectors by
-   tests/frame_replay_guard_test.cc). The state lives on the key set: a new key starts empty;
-   setting the key a slot already holds keeps it.
+1. SEC PR-01, frame replay (hive-node wire-protocol.md 6.6 "Replay", D-075, D-086). A frame
+   that decrypts plays only if its IV is new for the key it decrypted under: per key and IV
+   ssrc, the newest IV timestamp and the IVs within 2 s of the codec clock behind it
+   (api/crypto/frame_replay_guard.h). The state lives on the key set: a new key starts empty;
+   setting the key a slot already holds keeps it. Nothing resets while the key lives (D-086,
+   since build-4): no reset on time, and an ssrc evicted past the 16 live ones is retired for
+   the key's life (at most 256; past that, frames of an ssrc not held are refused).
+   Tests: api/crypto/frame_replay_guard_unittest.cc (in crypto_unittests), and hive-node's
+   frame_replay vectors by tests/frame_replay_guard_test.cc.
 2. SEC WEBRTC-01, the RTP audio-level header extensions (ssrc-audio-level, csrc-audio-level),
    which travel outside the frame encryption (wire-protocol.md 6.6): dropped from every parsed
    description at session level and in media sections (api/webrtc_sdp.cc), never offered or
    answered (the voice engine lists ssrc-audio-level as stopped), and never sent whatever was
    negotiated (the audio send channel's extension filter).
+3. The key index a played frame decrypted under (honeycomb-ios D156; wire-protocol.md 6.8.1
+   "Switching"; since build-4). FrameCryptorTransformerObserver::OnFrameDecryptedWithKeyIndex,
+   empty by default, is posted like OnFrameCryptionStateChanged for a receiver's first played
+   frame and then only when the index changes (DecryptedKeyIndexReport); only frames that
+   decrypted and passed the replay check report. RTCFrameCryptorDelegate gains the @optional
+   frameCryptor:didDecryptFrameWithKeyIndex:participantId:.
 
 --- a/api/crypto/BUILD.gn
 +++ b/api/crypto/BUILD.gn
@@ -25,9 +34,17 @@ WEBRTC-PATCHED.sha256 after. Re-derive on every WebRTC commit upgrade.
    ]
  
    deps = [
+@@ -88,6 +89,7 @@ if (rtc_include_tests) {
+     testonly = true
+     sources = [
+       "frame_crypto_transformer_unittest.cc",
++      "frame_replay_guard_unittest.cc",
+       "sif_payload_unittest.cc",
+     ]
+     deps = [
 --- a/api/crypto/frame_crypto_transformer.cc
 +++ b/api/crypto/frame_crypto_transformer.cc
-@@ -826,6 +826,24 @@ void FrameCryptorTransformer::decryptFrame(
+@@ -826,6 +826,28 @@ void FrameCryptorTransformer::decryptFrame(
      return;
    }
  
@@ -41,17 +58,39 @@ WEBRTC-PATCHED.sha256 after. Re-derive on every WebRTC commit upgrade.
 +          std::span<const uint8_t>(iv),
 +          type_ == webrtc::FrameCryptorTransformer::MediaType::kAudioFrame
 +              ? FrameReplayGuard::kAudioWindowTicks
-+              : FrameReplayGuard::kVideoWindowTicks,
-+          webrtc::TimeMillis())) {
++              : FrameReplayGuard::kVideoWindowTicks)) {
 +    RTC_LOG(LS_VERBOSE) << "FrameCryptorTransformer::decryptFrame() dropping "
 +                           "a replayed frame for participant "
 +                        << participant_id_;
 +    return;
 +  }
++  // honeycomb (honeycomb-ios D156): which key this played frame decrypted
++  // under, once per change, so a re-key's switch is observed.
++  if (decrypted_key_index_.Changed(key_index)) {
++    onFrameDecryptedWithKeyIndex(key_index);
++  }
 +
    webrtc::Buffer payload(buffer.data(), buffer.size());
    webrtc::Buffer data_out;
    data_out.AppendData(frame_header);
+@@ -851,6 +873,17 @@ void FrameCryptorTransformer::onFrameCryptionStateChanged(
+   }
+ }
+ 
++void FrameCryptorTransformer::onFrameDecryptedWithKeyIndex(int key_index) {
++  webrtc::MutexLock lock(&mutex_);
++  if (observer_) {
++    RTC_DCHECK(signaling_thread_ != nullptr);
++    signaling_thread_->PostTask([observer = observer_, key_index = key_index,
++                                 participant_id = participant_id_]() mutable {
++      observer->OnFrameDecryptedWithKeyIndex(participant_id, key_index);
++    });
++  }
++}
++
+ webrtc::Buffer FrameCryptorTransformer::makeIv(uint32_t ssrc, uint32_t timestamp) {
+   uint32_t send_count = 0;
+   if (send_counts_.find(ssrc) == send_counts_.end()) {
 --- a/api/crypto/frame_crypto_transformer.h
 +++ b/api/crypto/frame_crypto_transformer.h
 @@ -19,6 +19,7 @@
@@ -62,7 +101,7 @@ WEBRTC-PATCHED.sha256 after. Re-derive on every WebRTC commit upgrade.
  #include "api/frame_transformer_interface.h"
  #include "api/make_ref_counted.h"
  #include "api/rtc_error.h"
-@@ -118,6 +119,20 @@ class ParticipantKeyHandler : public webrtc::RefCountInterface {
+@@ -118,6 +119,18 @@ class ParticipantKeyHandler : public webrtc::RefCountInterface {
      std::vector<uint8_t> encryption_key;
      KeySet(std::vector<uint8_t> material, std::vector<uint8_t> encryptionKey)
          : material(material), encryption_key(encryptionKey) {}
@@ -70,11 +109,9 @@ WEBRTC-PATCHED.sha256 after. Re-derive on every WebRTC commit upgrade.
 +    // honeycomb (SEC PR-01): the replay state belongs to the key, so a new
 +    // key starts empty and the state goes when the key is dropped. Called
 +    // only for a frame that decrypted under this key.
-+    bool AcceptReplay(std::span<const uint8_t> iv,
-+                      uint32_t window_ticks,
-+                      int64_t now_ms) {
++    bool AcceptReplay(std::span<const uint8_t> iv, uint32_t window_ticks) {
 +      webrtc::MutexLock lock(&replay_mutex_);
-+      return replay_guard_.Accept(iv, window_ticks, now_ms);
++      return replay_guard_.Accept(iv, window_ticks);
 +    }
 +
 +   private:
@@ -83,7 +120,7 @@ WEBRTC-PATCHED.sha256 after. Re-derive on every WebRTC commit upgrade.
    };
  
   public:
-@@ -213,6 +228,12 @@ class ParticipantKeyHandler : public webrtc::RefCountInterface {
+@@ -213,6 +226,12 @@ class ParticipantKeyHandler : public webrtc::RefCountInterface {
      if (key_index >= 0) {
        current_key_index_ = key_index % crypto_key_ring_.size();
      }
@@ -96,12 +133,42 @@ WEBRTC-PATCHED.sha256 after. Re-derive on every WebRTC commit upgrade.
      crypto_key_ring_[current_key_index_] =
          DeriveKeys(password, key_provider_->options().ratchet_salt,
                     key_provider_->options().frame_key_bits());
+@@ -395,6 +414,12 @@ class FrameCryptorTransformerObserver : public webrtc::RefCountInterface {
+  public:
+   virtual void OnFrameCryptionStateChanged(const std::string participant_id,
+                                            FrameCryptionState error) = 0;
++  // honeycomb (honeycomb-ios D156; hive-node wire-protocol.md 6.8.1
++  // "Switching"): a receiving transformer's played frame decrypted under
++  // `key_index`, reported for the first played frame and then only when the
++  // index changes. Posted like OnFrameCryptionStateChanged.
++  virtual void OnFrameDecryptedWithKeyIndex(const std::string participant_id,
++                                            int key_index) {}
+ 
+  protected:
+   virtual ~FrameCryptorTransformerObserver() {}
+@@ -484,6 +509,7 @@ class RTC_EXPORT FrameCryptorTransformer
+   void encryptFrame(std::unique_ptr<webrtc::TransformableFrameInterface> frame);
+   void decryptFrame(std::unique_ptr<webrtc::TransformableFrameInterface> frame);
+   void onFrameCryptionStateChanged(FrameCryptionState error);
++  void onFrameDecryptedWithKeyIndex(int key_index);
+   webrtc::Buffer makeIv(uint32_t ssrc, uint32_t timestamp);
+   uint8_t getIvSize();
+ 
+@@ -505,6 +531,7 @@ class RTC_EXPORT FrameCryptorTransformer
+   webrtc::scoped_refptr<FrameCryptorTransformerObserver> observer_;
+   FrameCryptionState last_enc_error_ = FrameCryptionState::kNew;
+   FrameCryptionState last_dec_error_ = FrameCryptionState::kNew;
++  DecryptedKeyIndexReport decrypted_key_index_;
+ };
+ 
+ class RTC_EXPORT EncryptedPacket : public webrtc::RefCountInterface {
 --- /dev/null
 +++ b/api/crypto/frame_replay_guard.h
-@@ -0,0 +1,155 @@
+@@ -0,0 +1,177 @@
 +/*
 + * honeycomb-webrtc patch (SEC PR-01; hive-node wire-protocol.md 6.6 "Replay",
-+ * D-075). Licensed under the Apache License, Version 2.0, as the file next to it.
++ * D-075, D-086). Licensed under the Apache License, Version 2.0, as the file
++ * next to it.
 + */
 +
 +#ifndef API_CRYPTO_FRAME_REPLAY_GUARD_H_
@@ -125,10 +192,16 @@ WEBRTC-PATCHED.sha256 after. Re-derive on every WebRTC commit upgrade.
 +// whose timestamp is more than the window behind N. The IV is authenticated by
 +// GCM; the RTP header's timestamp, which the SFU rewrites, is never read.
 +//
-+// Bounds: at most kMaxSsrcs ssrcs (a new one replaces the one heard from
-+// longest ago) and, per ssrc, the IVs within the window. An ssrc whose every
-+// frame has been refused as window-behind for kResetAfterMs is reset, so a
-+// sender whose own timestamp jumps back does not go silent.
++// Nothing resets while the key lives (D-086): the SFU needs no key to withhold
++// an ssrc's live frames and send its old ones, so a reset on time, or on
++// eviction, would reopen the replay this closes. A sender whose own timestamp
++// jumps back on one ssrc is heard again at the next key.
++//
++// Bounds: at most kMaxSsrcs live ssrcs. A new ssrc past that replaces the one
++// heard from longest ago, and the replaced ssrc is retired: its frames are
++// refused for the rest of the key's life. At most kMaxRetired ssrcs are
++// retired; past that, a frame of any ssrc the guard does not hold is refused.
++// Per live ssrc, only the IVs within the window are kept.
 +//
 +// Not thread-safe; the owner holds a lock.
 +class FrameReplayGuard {
@@ -137,53 +210,48 @@ WEBRTC-PATCHED.sha256 after. Re-derive on every WebRTC commit upgrade.
 +  static constexpr uint32_t kAudioWindowTicks = 96000;   // 48 kHz
 +  static constexpr uint32_t kVideoWindowTicks = 180000;  // 90 kHz
 +  static constexpr size_t kMaxSsrcs = 16;
-+  static constexpr int64_t kResetAfterMs = 2000;
++  static constexpr size_t kMaxRetired = 256;
 +  static constexpr size_t kIvSize = 12;
 +
 +  // `iv` is the 12-byte IV of a frame that decrypted under this guard's key.
 +  // Returns true when the frame plays, false when it is refused (an IV of
 +  // another length is refused).
-+  bool Accept(std::span<const uint8_t> iv,
-+              uint32_t window_ticks,
-+              int64_t now_ms) {
++  bool Accept(std::span<const uint8_t> iv, uint32_t window_ticks) {
 +    if (iv.size() != kIvSize) {
 +      return false;
 +    }
 +    const uint32_t ssrc = Read32(iv, 0);
 +    const uint32_t ts = Read32(iv, 4);
 +    const uint32_t tail = Read32(iv, 8);
-+    ++clock_;
 +    Stream* stream = Find(ssrc);
 +    if (stream == nullptr) {
++      if (IsRetired(ssrc)) {
++        return false;
++      }
 +      if (streams_.size() >= kMaxSsrcs) {
-+        streams_.erase(std::min_element(
++        if (retired_.size() >= kMaxRetired) {
++          return false;
++        }
++        auto oldest = std::min_element(
 +            streams_.begin(), streams_.end(),
 +            [](const Stream& a, const Stream& b) {
 +              return a.last_heard < b.last_heard;
-+            }));
++            });
++        retired_.push_back(oldest->ssrc);
++        streams_.erase(oldest);
 +      }
-+      streams_.push_back(Start(ssrc, ts, tail));
++      streams_.push_back(Stream{ssrc, ts, {Seen{ts, tail}}, ++clock_});
 +      return true;
 +    }
-+    stream->last_heard = clock_;
 +    if (Behind(stream->newest, ts) > window_ticks) {
-+      if (!stream->behind) {
-+        stream->behind = true;
-+        stream->behind_since_ms = now_ms;
-+        return false;
-+      }
-+      if (now_ms - stream->behind_since_ms < kResetAfterMs) {
-+        return false;
-+      }
-+      *stream = Start(ssrc, ts, tail);
-+      return true;
++      return false;
 +    }
-+    stream->behind = false;
 +    for (const Seen& seen : stream->seen) {
 +      if (seen.ts == ts && seen.tail == tail) {
 +        return false;
 +      }
 +    }
++    stream->last_heard = ++clock_;
 +    if (Behind(stream->newest, ts) == 0) {
 +      stream->newest = ts;
 +    }
@@ -199,6 +267,7 @@ WEBRTC-PATCHED.sha256 after. Re-derive on every WebRTC commit upgrade.
 +  }
 +
 +  size_t ssrc_count() const { return streams_.size(); }
++  size_t retired_count() const { return retired_.size(); }
 +
 +  size_t remembered(uint32_t ssrc) const {
 +    for (const Stream& stream : streams_) {
@@ -225,17 +294,11 @@ WEBRTC-PATCHED.sha256 after. Re-derive on every WebRTC commit upgrade.
 +    uint32_t newest;
 +    std::vector<Seen> seen;
 +    uint64_t last_heard;
-+    bool behind;
-+    int64_t behind_since_ms;
 +  };
 +
 +  static uint32_t Read32(std::span<const uint8_t> iv, size_t at) {
 +    return (uint32_t{iv[at]} << 24) | (uint32_t{iv[at + 1]} << 16) |
 +           (uint32_t{iv[at + 2]} << 8) | uint32_t{iv[at + 3]};
-+  }
-+
-+  Stream Start(uint32_t ssrc, uint32_t ts, uint32_t tail) const {
-+    return Stream{ssrc, ts, {Seen{ts, tail}}, clock_, false, 0};
 +  }
 +
 +  Stream* Find(uint32_t ssrc) {
@@ -247,13 +310,219 @@ WEBRTC-PATCHED.sha256 after. Re-derive on every WebRTC commit upgrade.
 +    return nullptr;
 +  }
 +
++  bool IsRetired(uint32_t ssrc) const {
++    return std::find(retired_.begin(), retired_.end(), ssrc) != retired_.end();
++  }
++
 +  std::vector<Stream> streams_;
++  std::vector<uint32_t> retired_;
 +  uint64_t clock_ = 0;
++};
++
++// Which key index a played frame decrypted under, reported once per change
++// (honeycomb-ios D156; hive-node wire-protocol.md 6.8.1 "Switching"): the
++// first played frame reports its index, and later ones only when the index
++// differs from the last reported. Not thread-safe; one per receiving
++// transformer, used on its decrypt path.
++class DecryptedKeyIndexReport {
++ public:
++  // True when `key_index` is to be reported for this played frame.
++  bool Changed(int key_index) {
++    if (key_index == last_) {
++      return false;
++    }
++    last_ = key_index;
++    return true;
++  }
++
++ private:
++  int last_ = -1;
 +};
 +
 +}  // namespace webrtc
 +
 +#endif  // API_CRYPTO_FRAME_REPLAY_GUARD_H_
+--- /dev/null
++++ b/api/crypto/frame_replay_guard_unittest.cc
+@@ -0,0 +1,178 @@
++/*
++ * honeycomb-webrtc patch (SEC PR-01; hive-node wire-protocol.md 6.6 "Replay",
++ * D-075, D-086; honeycomb-ios D156). Licensed under the Apache License,
++ * Version 2.0, as the file next to it.
++ */
++
++#include "api/crypto/frame_replay_guard.h"
++
++#include <stdint.h>
++
++#include <array>
++#include <vector>
++
++#include "test/gtest.h"
++
++namespace webrtc {
++namespace {
++
++constexpr uint32_t kWindow = FrameReplayGuard::kAudioWindowTicks;
++
++std::array<uint8_t, 12> Iv(uint32_t ssrc, uint32_t ts, uint32_t tail = 0) {
++  std::array<uint8_t, 12> iv{};
++  const uint32_t words[3] = {ssrc, ts, tail};
++  for (int w = 0; w < 3; ++w) {
++    for (int b = 0; b < 4; ++b) {
++      iv[w * 4 + b] = static_cast<uint8_t>(words[w] >> (24 - 8 * b));
++    }
++  }
++  return iv;
++}
++
++bool Accept(FrameReplayGuard& guard, uint32_t ssrc, uint32_t ts,
++            uint32_t tail = 0) {
++  const auto iv = Iv(ssrc, ts, tail);
++  return guard.Accept(iv, kWindow);
++}
++
++TEST(FrameReplayGuard, RepeatedIvIsRefusedAndLateFrameInsideWindowPlays) {
++  FrameReplayGuard guard;
++  EXPECT_TRUE(Accept(guard, 1, 1000));
++  EXPECT_TRUE(Accept(guard, 1, 3000));
++  EXPECT_TRUE(Accept(guard, 1, 2000));  // late, inside the window
++  EXPECT_FALSE(Accept(guard, 1, 1000));
++  EXPECT_FALSE(Accept(guard, 1, 3000));
++  EXPECT_FALSE(Accept(guard, 1, 2000));
++  // Same timestamp, other IV tail: another frame, so it plays.
++  EXPECT_TRUE(Accept(guard, 1, 2000, 7));
++}
++
++TEST(FrameReplayGuard, MoreThanTheWindowBehindIsRefused) {
++  FrameReplayGuard guard;
++  EXPECT_TRUE(Accept(guard, 1, 10 * kWindow));
++  EXPECT_TRUE(Accept(guard, 1, 9 * kWindow));       // exactly the window
++  EXPECT_FALSE(Accept(guard, 1, 9 * kWindow - 1));  // one tick more
++}
++
++// D-086: a window-behind run of any length never reopens the ssrc. The SFU
++// withholds the live frames and sends old ones; every one stays refused, and
++// so does the old stream continuing from there.
++TEST(FrameReplayGuard, WindowBehindRunOfAnyLengthNeverReopens) {
++  FrameReplayGuard guard;
++  const uint32_t live = 100 * kWindow;
++  for (uint32_t i = 0; i < 50; ++i) {
++    ASSERT_TRUE(Accept(guard, 1, i * 960));
++  }
++  ASSERT_TRUE(Accept(guard, 1, live));
++  for (uint32_t i = 0; i < 100000; ++i) {
++    ASSERT_FALSE(Accept(guard, 1, (i % 50) * 960, i)) << "frame " << i;
++  }
++  for (uint32_t i = 0; i < 1000; ++i) {
++    ASSERT_FALSE(Accept(guard, 1, 50 * 960 + i * 960)) << "continuation " << i;
++  }
++  // The live stream still plays.
++  EXPECT_TRUE(Accept(guard, 1, live + 960));
++}
++
++// D-086 review: eviction is not a reset. The ssrc heard from longest ago is
++// replaced, retired, and refused for the rest of the key's life, whatever
++// timestamp its frames carry.
++TEST(FrameReplayGuard, EvictedSsrcIsRetiredForTheKeysLife) {
++  FrameReplayGuard guard;
++  for (uint32_t ssrc = 1; ssrc <= FrameReplayGuard::kMaxSsrcs; ++ssrc) {
++    ASSERT_TRUE(Accept(guard, ssrc, 1000));
++  }
++  for (uint32_t ssrc = 2; ssrc <= FrameReplayGuard::kMaxSsrcs; ++ssrc) {
++    ASSERT_TRUE(Accept(guard, ssrc, 2000));
++  }
++  ASSERT_TRUE(Accept(guard, 100, 1000));  // a 17th: ssrc 1 is the oldest
++  EXPECT_EQ(guard.ssrc_count(), FrameReplayGuard::kMaxSsrcs);
++  EXPECT_EQ(guard.retired_count(), 1u);
++  EXPECT_FALSE(Accept(guard, 1, 1000));  // its old frame
++  EXPECT_FALSE(Accept(guard, 1, 500));   // anything older
++  EXPECT_FALSE(Accept(guard, 1, 50 * kWindow));  // or newer
++  for (uint32_t i = 0; i < 1000; ++i) {
++    ASSERT_TRUE(Accept(guard, 100, 3000 + i * 960));
++    ASSERT_FALSE(Accept(guard, 1, i * 960, i));
++  }
++  EXPECT_EQ(guard.retired_count(), 1u);  // refusing it never re-adds it
++}
++
++// Refused frames don't refresh an ssrc, so a replaying SFU can't choose
++// which live ssrc is evicted by repeating its frames.
++TEST(FrameReplayGuard, RefusedFramesDoNotKeepAnSsrcFresh) {
++  FrameReplayGuard guard;
++  for (uint32_t ssrc = 1; ssrc <= FrameReplayGuard::kMaxSsrcs; ++ssrc) {
++    ASSERT_TRUE(Accept(guard, ssrc, 1000));
++  }
++  for (int i = 0; i < 10; ++i) {
++    ASSERT_FALSE(Accept(guard, 1, 1000));  // replays of ssrc 1
++  }
++  ASSERT_TRUE(Accept(guard, 100, 1000));
++  EXPECT_FALSE(Accept(guard, 1, 2000));   // ssrc 1 was still the oldest
++  EXPECT_TRUE(Accept(guard, 2, 2000));
++}
++
++// At most kMaxRetired retired; past that a frame of any ssrc the guard does
++// not hold is refused, and the live ssrcs keep playing.
++TEST(FrameReplayGuard, PastTheRetiredBoundUnknownSsrcsAreRefused) {
++  FrameReplayGuard guard;
++  uint32_t ssrc = 1;
++  for (; guard.retired_count() < FrameReplayGuard::kMaxRetired; ++ssrc) {
++    ASSERT_TRUE(Accept(guard, ssrc, 1000));
++  }
++  // Fill up to the live bound once more so the next new ssrc needs an
++  // eviction.
++  while (guard.ssrc_count() < FrameReplayGuard::kMaxSsrcs) {
++    ASSERT_TRUE(Accept(guard, ssrc++, 1000));
++  }
++  EXPECT_EQ(guard.retired_count(), FrameReplayGuard::kMaxRetired);
++  EXPECT_FALSE(Accept(guard, 0xF0000000u, 1000));
++  EXPECT_EQ(guard.ssrc_count(), FrameReplayGuard::kMaxSsrcs);
++  EXPECT_EQ(guard.retired_count(), FrameReplayGuard::kMaxRetired);
++  EXPECT_FALSE(Accept(guard, 1, 5000));  // retired stays retired
++  EXPECT_TRUE(Accept(guard, ssrc - 1, 2000));  // a live one plays
++}
++
++TEST(FrameReplayGuard, TimestampWrapsBySerialArithmetic) {
++  FrameReplayGuard guard;
++  EXPECT_TRUE(Accept(guard, 1, 0xFFFFFF00u));
++  EXPECT_TRUE(Accept(guard, 1, 0x00000100u));  // past the wrap: newer
++  EXPECT_FALSE(Accept(guard, 1, 0xFFFFFF00u));
++  EXPECT_TRUE(Accept(guard, 1, 0xFFFFFF80u));  // late, inside the window
++  EXPECT_FALSE(Accept(guard, 1, 0x00000100u - kWindow - 1));
++}
++
++TEST(FrameReplayGuard, OnlyWindowIvsAreRemembered) {
++  FrameReplayGuard guard;
++  for (uint32_t i = 0; i < 1000; ++i) {
++    ASSERT_TRUE(Accept(guard, 1, i * 960));
++  }
++  // 96 000 ticks of 960 apart: the newest and the 100 behind it.
++  EXPECT_EQ(guard.remembered(1), 101u);
++}
++
++TEST(FrameReplayGuard, IvOfAnotherLengthIsRefused) {
++  FrameReplayGuard guard;
++  const std::vector<uint8_t> short_iv(11, 0);
++  const std::vector<uint8_t> long_iv(13, 0);
++  EXPECT_FALSE(guard.Accept(short_iv, kWindow));
++  EXPECT_FALSE(guard.Accept(long_iv, kWindow));
++  EXPECT_EQ(guard.ssrc_count(), 0u);
++}
++
++// honeycomb-ios D156: the key index a played frame decrypted under is
++// reported for the first played frame, then only when it changes.
++TEST(DecryptedKeyIndexReport, ReportsTheFirstIndexAndEachChange) {
++  DecryptedKeyIndexReport report;
++  std::vector<int> reported;
++  for (int index : {0, 0, 0, 1, 1, 0, 1, 1, 2, 2}) {
++    if (report.Changed(index)) {
++      reported.push_back(index);
++    }
++  }
++  EXPECT_EQ(reported, (std::vector<int>{0, 1, 0, 1, 2}));
++}
++
++}  // namespace
++}  // namespace webrtc
 --- a/api/webrtc_sdp.cc
 +++ b/api/webrtc_sdp.cc
 @@ -757,6 +757,15 @@ void WriteSctpInit(const std::vector<uint8_t>& cookie, StringBuilder* os) {
@@ -338,3 +607,51 @@ WEBRTC-PATCHED.sha256 after. Re-derive on every WebRTC commit upgrade.
                            true, env_.field_trials());
    if (send_rtp_extensions_ != filtered_extensions) {
      send_rtp_extensions_.swap(filtered_extensions);
+--- a/sdk/objc/api/peerconnection/RTCFrameCryptor+Private.h
++++ b/sdk/objc/api/peerconnection/RTCFrameCryptor+Private.h
+@@ -35,6 +35,8 @@ class RTCFrameCryptorDelegateAdapter : public FrameCryptorTransformerObserver {
+ 
+   void OnFrameCryptionStateChanged(const std::string participant_id,
+                                    FrameCryptionState state) override;
++  void OnFrameDecryptedWithKeyIndex(const std::string participant_id,
++                                    int key_index) override;
+ 
+  private:
+   __weak RTC_OBJC_TYPE(RTCFrameCryptor) * frame_cryptor_;
+--- a/sdk/objc/api/peerconnection/RTCFrameCryptor.h
++++ b/sdk/objc/api/peerconnection/RTCFrameCryptor.h
+@@ -47,6 +47,14 @@ RTC_OBJC_EXPORT
+     - (void)frameCryptor
+     : (RTC_OBJC_TYPE(RTCFrameCryptor) *)frameCryptor didStateChangeWithParticipantId
+     : (NSString *)participantId withState : (RTC_OBJC_TYPE(RTCFrameCryptorState))stateChanged;
++
++@optional
++/** honeycomb: a played frame decrypted under `keyIndex`. Called for the first
++ *  played frame, then only when the index changes, on the same queue as
++ *  frameCryptor:didStateChangeWithParticipantId:withState:. */
++- (void)frameCryptor:(RTC_OBJC_TYPE(RTCFrameCryptor) *)frameCryptor
++    didDecryptFrameWithKeyIndex:(int)keyIndex
++                  participantId:(NSString *)participantId;
+ @end
+ 
+ RTC_OBJC_EXPORT
+--- a/sdk/objc/api/peerconnection/RTCFrameCryptor.mm
++++ b/sdk/objc/api/peerconnection/RTCFrameCryptor.mm
+@@ -89,6 +89,17 @@ void RTCFrameCryptorDelegateAdapter::OnFrameCryptionStateChanged(const std::stri
+     }
+   }
+ }
++
++void RTCFrameCryptorDelegateAdapter::OnFrameDecryptedWithKeyIndex(const std::string participant_id,
++                                                                  int key_index) {
++  RTC_OBJC_TYPE(RTCFrameCryptor) *frameCryptor = frame_cryptor_;
++  id<RTC_OBJC_TYPE(RTCFrameCryptorDelegate)> delegate = frameCryptor.delegate;
++  if ([delegate respondsToSelector:@selector(frameCryptor:didDecryptFrameWithKeyIndex:participantId:)]) {
++    [delegate frameCryptor:frameCryptor
++        didDecryptFrameWithKeyIndex:key_index
++                      participantId:[NSString stringForStdString:participant_id]];
++  }
++}
+ }  // namespace webrtc
+ 
+ @implementation RTC_OBJC_TYPE (RTCFrameCryptor) {

@@ -1,77 +1,99 @@
-# Release `build-4`: planned
+# Release `build-4`: no replay reset while the key lives, and the decrypted key index
 
-This is a list, not a release. Nothing on it is built yet. Each item says what changes in WebRTC,
-why, how it is checked, and what the consumers do with it. The pipeline, pins and release steps
-stay as in `build-3` (`releases/build-3.md`). When the list is complete, its items are added to
-`patches/webrtc-a545de4.patch` (or a successor) and this file becomes the release notes.
+`build-3`'s slices, GN arguments, Xcode and pipeline, with `patches/webrtc-a545de4.patch`
+changed in two ways (honeycomb-security PR #10's follow-ups; Paul, 2026-11-04). The WebRTC
+commit, the webrtc-build tag and every pin in `PINS` are unchanged.
 
-## 1. Report the key index a frame decrypted under (honeycomb-ios D156; Paul, 2026-11-04)
+## 1. The replay check never resets while the key lives (hive-node #71, D-086)
 
-**Why.**
-- honeycomb-ios re-keys one-to-one calls every 10 minutes (hive-node wire-protocol.md §6.6 and
-  §6.8.1, D-079; SEC PR-05). The callee answers with `key_index` + 1 and fresh keys, and each
-  side then drops its old keys 30 s after its first frame under the new ones.
-- The cryptor reports only state changes (`FrameCryptionState`), never which `key_index` a frame
-  decrypted under. So honeycomb-ios infers the switch from time and packet counts:
-  - the callee switches 10 s after its re-answer, at the next frame from the caller;
-  - the caller takes the first frame 15 s after installing the new keys as the callee's first
-    frame under them.
-- Paul accepted that inference on 2026-11-04 because it fails closed: if every re-answer is lost
-  while the caller's offers still arrive, the call ends, and nothing is ever played in the clear.
-  This item makes the switch observed rather than inferred.
+**Why.** `build-3`'s guard reset an `ssrc`'s state after 2 s in which every frame was
+window-behind, so that a sender whose own clock jumped back wouldn't go silent. That reset was
+argued safe because "only a key holder can cause this". That's wrong: the SFU needs no key. It
+withholds an `ssrc`'s live frames and sends that `ssrc`'s old frames instead. They decrypt and
+every one is window-behind, so after 2 s the reset restarts the stream at an old timestamp, and
+the SFU can replay the rest. Eviction was a reset too. Past 16 `ssrc`s the oldest was replaced,
+and a replaced one coming back started fresh, so an SFU ordering frames could choose what to
+evict and then replay it whole.
 
-**What changes in WebRTC** (`api/crypto/frame_crypto_transformer.h` and `.cc`, and the
-Objective-C wrapper in `sdk/objc/api/peerconnection/RTCFrameCryptor*`):
-- **The C++ observer:** `FrameCryptorTransformerObserver` gains
-  `virtual void OnFrameDecryptedWithKeyIndex(const std::string participant_id, int key_index) {}`.
-  It has an empty default body, so observers that don't implement it, LiveKit's included, are
-  unchanged.
-- **When `decryptFrame` calls it:**
-  - only after a frame has decrypted and passed the replay check (`build-3`'s
-    `FrameReplayGuard`), so a frame that isn't played never reports;
-  - with the `key_index` read from the frame trailer, which is the index whose key set decrypted
-    it (after a ratchet, that index too);
-  - once per change: the transformer keeps the last index it reported (initially none) and calls
-    the observer only when a played frame's index differs. That's one call when the first frame
-    arrives and one per switch, never per frame.
-- **Threading:** the call is posted the way `onFrameCryptionStateChanged` posts state changes,
-  never on the decode path.
-- **The Objective-C wrapper:** `RTCFrameCryptorDelegate` gains an optional
-  `frameCryptor:didDecryptFrameWithKeyIndex:participantId:` (an `@optional` method, so existing
-  delegates still compile). `RTCFrameCryptor`'s observer adapter forwards the C++ call to it on
-  the same queue as `didStateChangeWithParticipantId:withState:`.
-- **Encryption is unchanged:** the sender already chooses its index (`key_index_`, set by
-  `SetKeyIndex`), so nothing new is reported for it.
+**What changed** (`api/crypto/frame_replay_guard.h`, hive-node wire-protocol.md §6.6 "Replay"
+at `7375f82`):
+- **No reset on time.** `kResetAfterMs` and the window-behind run are gone, and so is the clock
+  argument: `Accept(iv, window_ticks)`. A frame more than the window behind is refused however
+  long the run lasts.
+- **Evicted `ssrc`s are retired.** A new `ssrc` past the 16 live ones still replaces the one
+  heard from longest ago. The replaced `ssrc` is then retired, and its frames are refused for the
+  rest of the key's life, whatever their timestamp.
+- **Retired bound:** at most 256 retired per key. Past that, a frame of any `ssrc` the guard
+  doesn't hold is refused, and the live ones keep playing.
+- **Only accepted frames count as heard.** A refused frame no longer refreshes its `ssrc`, so
+  repeating an `ssrc`'s frames can't steer which live `ssrc` is evicted.
+- **Unchanged:** the state lives on the key set and goes only with its key. A sender whose
+  timestamp jumps back on one `ssrc` is heard again at the next key: the next one-to-one re-key
+  (about 10 minutes, §6.8.1), or a group's next epoch.
 
-**How it is checked.**
-- **A unit test beside `tests/frame_replay_guard_test.cc`:** a transformer with a test observer
-  decrypts frames under index 0, then 1, then 0 again (a late frame), then 1. Expected: the
-  reports are 0, 1, 0, 1. A frame that fails to decrypt reports nothing, and neither does a
-  replayed frame the guard refuses. The `source-patch` CI job runs it on the patched upstream
-  files, as it does the replay vectors.
-- **The two macOS builds:** as in `build-3`, they show that the patched tree compiles with
-  upstream's warnings-as-errors and that the hash lists hold.
-- **Hashes:** `WEBRTC-UPSTREAM.sha256` and `WEBRTC-PATCHED.sha256` gain the Objective-C files the
-  patch touches.
+## 2. The key index a played frame decrypted under (honeycomb-ios D156)
 
-**What the consumers do.**
-- **honeycomb-ios:** `WebRTCMediaEngine` forwards the report, and `HiveCallService` replaces both
-  inferences with it:
-  - **The callee** switches its sending index when the caller's first frame under the new index
-    is reported. It no longer waits for 10 s after its re-answer.
-  - **The caller** starts the 30 s old-key timer when the callee's first frame under the new
-    index is reported. It no longer uses install + 15 s.
-  - **If no report comes:** the re-key is given up, as an unanswered one is today. Old keys stay
-    until a report arrives, so the lost re-answer case keeps the call instead of ending it.
-  - D156 and `CallRekeyVectorTests` change to match, and the two-phone step in
-    `docs/TESTNET-TWO-PHONE.md` (C4 P10-1) is run again on this build.
-- **The fork (`client-sdk-swift`):** it pins `150.7871.4-hc.4` exactly, and nothing else changes,
-  since LiveKit doesn't implement the new method.
-- **The package:** `150.7871.4-hc.4` at `build-4`'s zip and sha256, as `hc.3` was.
+**Why.** honeycomb-ios re-keys one-to-one calls every 10 minutes (§6.8.1, D-079). The cryptor
+reported state changes but never which `key_index` a frame decrypted under. So the app inferred
+the switch from time and packet counts, and Paul accepted that as fail-closed on 2026-11-04. With
+this item the app observes the switch, which is how §6.8.1 "Switching" words it.
 
-**The spec already says this** (hive-node wire-protocol.md §6.8.1, "Switching"):
-- the callee sends with the new key "once a frame from the caller under `k` decrypts";
-- each side keeps the old receive key "until 30 s after the first frame it **received** under
-  the new one".
+**What changed:**
+- **The C++ observer:** `FrameCryptorTransformerObserver::OnFrameDecryptedWithKeyIndex(participant_id,
+  key_index)`. It has an empty default body, so LiveKit's observers are unchanged.
+- **When `decryptFrame` posts it:** only for frames that decrypted *and* passed the replay
+  check, with the trailer's `key_index`. It's posted for a receiver's first played frame, then
+  only when the index changes (`DecryptedKeyIndexReport`), so it's never per frame. It goes to
+  the signaling thread, like `OnFrameCryptionStateChanged`.
+- **Objective-C:** `RTCFrameCryptorDelegate` gains `@optional`
+  `frameCryptor:didDecryptFrameWithKeyIndex:participantId:`. The adapter forwards to it only
+  when the delegate responds to it.
+- **Unchanged:** encryption. The sender still chooses its index with `SetKeyIndex`.
 
-This item lets honeycomb-ios implement that wording as written. The wire format doesn't change.
+## Tests, now inside the patch
+
+- **New `api/crypto/frame_replay_guard_unittest.cc`,** added to WebRTC's `crypto_unittests`
+  target. Ten gtest cases:
+  - repeated IVs, and late frames inside the window;
+  - the window edge, wrap-around and the IV length;
+  - memory bounded to the window;
+  - D-086: a window-behind run of 100 000 frames never reopens an `ssrc`, an evicted `ssrc` stays
+    refused at any timestamp, and refused frames don't keep an `ssrc` fresh;
+  - the 256 retired bound;
+  - the key-index report (indexes 0 0 0 1 1 0 1 1 2 2 report 0 1 0 1 2).
+- **Check against `build-3`:** the same cases, run against `build-3`'s guard through an adapter
+  clock, fail the three D-086 cases and pass the other six.
+- **`tests/frame_replay_guard_test.cc`** now runs only hive-node's `frame_replay` vectors, which
+  live outside the WebRTC tree. `tests/frame_replay.vectors` is re-extracted at hive-node
+  `7375f82`: the same 15 frames and 5 drops, with only the source hash changed (#71 edited a
+  note).
+- **The `source-patch` CI job** installs googletest and builds the patch's test file with a
+  one-line `test/gtest.h` stand-in. It runs that file and the vectors.
+- **The two macOS builds:** `build.sh` also checks that the built `RTCFrameCryptor.h` declares
+  `didDecryptFrameWithKeyIndex:`.
+
+## Hash lists
+
+- **`WEBRTC-UPSTREAM.sha256`** adds the three Objective-C files (`RTCFrameCryptor.h`,
+  `RTCFrameCryptor+Private.h` and `RTCFrameCryptor.mm`).
+- **`WEBRTC-PATCHED.sha256`** has all ten files, the two new ones included.
+- **`apply-webrtc-patch.sh`** also looks under `sdk/` for leftover `.rej` and `.orig` files.
+
+## Then, in order (a person pushes the tags; agent sessions can't)
+
+1. **Tag `build-4`.** Merge this PR, then tag `build-4` at the merge commit on `main`, as for
+   `build-3`. The release job refuses unless the record's `COMMIT` is that commit.
+   ```sh
+   git fetch origin main
+   git tag -a build-4 -m "LiveKitWebRTC build-4: no replay reset while the key lives, retired ssrcs, decrypted key index (D-086, D156)" origin/main
+   git push origin build-4
+   ```
+2. **The package:** a PR on a branch off `agent/ui-ux/webrtc-package-hc3` points
+   `Package.swift` at `build-4`, with the zip's sha256 from the release notes. Tag it
+   `150.7871.4-hc.4` at that PR's head.
+3. **The fork** (`NGS-Labs-LLC/client-sdk-swift`) pins `150.7871.4-hc.4` exactly. Tag it
+   `2.18.0-hc.4`.
+4. **honeycomb-ios** pins `2.18.0-hc.4`, commits the new `Package.resolved`, and replaces D156's
+   two timing guesses with the report.
+
+The tag rulesets from `build-3` already cover `build-*`, `150.*` and `2.18.*`.
