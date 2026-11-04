@@ -28,6 +28,11 @@ while read -r sum path; do
 	grep -q "  $path\$" "$here/WEBRTC-UPSTREAM.sha256" || [ ! -e "$src/$path" ] || fail "$path already exists before the WebRTC patch"
 done < "$here/WEBRTC-PATCHED.sha256"
 patch -p1 -N -s -d "$src" < "$patchfile" || fail "$(basename "$patchfile") does not apply"
-[ -z "$(cd "$src" && find api media sdk -name '*.rej' -o -name '*.orig')" ] || fail "$(basename "$patchfile") left .rej or .orig files"
+# Only beside the files this patch touches: upstream's apple_prefix.patch, applied just before,
+# can leave its own .orig backups (BSD patch keeps one for a hunk applied at an offset).
+while read -r sum path; do
+	case "$sum" in ''|'#'*) continue ;; esac
+	[ ! -e "$src/$path.rej" ] && [ ! -e "$src/$path.orig" ] || fail "$(basename "$patchfile") left $path.rej or .orig"
+done < "$here/WEBRTC-PATCHED.sha256"
 check "$here/WEBRTC-PATCHED.sha256" "after the WebRTC patch"
 say "WebRTC source patched: $(basename "$patchfile") (sha256 $($sha256 "$patchfile" | cut -d' ' -f1))"
