@@ -19,7 +19,7 @@ let package = Package(
         .binaryTarget(
             name: "LiveKitWebRTC",
             url: "https://github.com/NGS-Labs-LLC/honeycomb-webrtc/releases/download/build-4/LiveKitWebRTC.xcframework.zip",
-            checksum: "24ee63e3a6727d447a21aca019e694c5f4c25325ccccab3875ea3fb5952e0db7"
+            checksum: "90d2a4eea356cade7b63e11937df777f6ba8723f7c56bd7587b31722d8cf0aa3"
         ),
     ]
 )
