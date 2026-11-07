@@ -58,10 +58,21 @@ compares the two results.
 - the GN arguments;
 - the build time and the CI run.
 
-CI builds twice on fresh runners and compares the two records. A tag `build-*` publishes a
-release once that comparison has run and the record's pins match `PINS` at the tag; its notes
-carry each asset's sha256, the comparison's verdict with both builds' hashes (`COMPARE`), and the
-full `BUILD-RECORD`. The comparison is recorded, not yet a gate (D82 3.5).
+CI builds twice on fresh runners and compares the two (`scripts/compare-builds.sh`). A tag
+`build-*` publishes a release only when the builds are reproducible and the record's pins match
+`PINS` at the tag. Its notes carry each asset's sha256, the comparison's verdict with both builds'
+hashes (`COMPARE`), and the full `BUILD-RECORD`.
+
+The comparison is a gate (SEC WEBRTC-03). Reproducible means:
+- every slice's binary and the key-provider header have the same sha256;
+- the resolved dependency set (`RESOLVED`) is the same, byte for byte;
+- every other file in the framework has the same sha256 (`MANIFEST.sha256`), **except the
+  `Info.plist` files**. Xcode writes the build machine's macOS build number into them
+  (`BuildMachineOSBuild`), and two runners can differ there while the binaries don't (build-4).
+
+The zip contains the `Info.plist` files, so its sha256 is recorded but not compared. If the builds
+differ in anything else, the compare job fails, its `COMPARE` artifact says what differs, and
+nothing is published. `tests/compare-builds-test.sh` checks the gate on every pipeline change.
 
 The workflow runs on pull requests that change the pipeline (`PINS`, `build.sh`, `patches/`,
 `tests/`, the workflow), on a manual dispatch, and on a `build-*` tag. Only the tag publishes.

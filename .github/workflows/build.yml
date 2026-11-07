@@ -1,15 +1,17 @@
 # Builds LiveKitWebRTC.xcframework from the pins in PINS (honeycomb-ios D82), twice on fresh
 # runners, and compares the two builds. A pull request that changes the pipeline runs it (that is
 # how D82 3.5's reproducibility is measured); so does a manual dispatch. A tag `build-*` also
-# publishes a release, after the comparison, whose notes carry every asset's sha256, both builds'
-# hashes, the comparison's verdict and BUILD-RECORD, once the record's pins match PINS at the tag.
+# publishes a release, but only when the two builds are reproducible (SEC WEBRTC-03:
+# scripts/compare-builds.sh, the same slices, header, resolved set and files, Info.plist excluded)
+# and the record's pins match PINS at the tag. Its notes carry every asset's sha256, both builds'
+# hashes, the comparison's verdict and BUILD-RECORD.
 # Nothing here holds a secret: the release uses this repository's GITHUB_TOKEN.
 name: Build
 
 on:
   workflow_dispatch:
   pull_request:
-    paths: [PINS, build.sh, patches/**, tests/**, .github/workflows/build.yml]
+    paths: [PINS, build.sh, patches/**, scripts/**, tests/**, .github/workflows/build.yml]
   push:
     tags: ['build-*']
 
@@ -51,6 +53,18 @@ jobs:
           ./frame_replay_guard_unittest
           g++ -std=c++20 -Wall -Wextra -Werror -I webrtc -o frame_replay_guard_test tests/frame_replay_guard_test.cc
           ./frame_replay_guard_test tests/frame_replay.vectors
+
+  compare-gate:
+    # Seconds, on Linux: the release gate (SEC WEBRTC-03) passes identical builds and builds that
+    # differ only in their Info.plist files, and fails any other difference.
+    name: The two-build comparison's gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Test scripts/compare-builds.sh
+        run: tests/compare-builds-test.sh
 
   build:
     name: LiveKitWebRTC, build ${{ matrix.attempt }}
@@ -103,32 +117,29 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          path: tag
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: build-*
       - name: Compare
-        # Measured and recorded, not yet a gate: byte-for-byte reproducibility is not yet claimed
-        # (D82 3.5). COMPARE carries the verdict and both builds' hashes into the release.
+        # The gate (SEC WEBRTC-03, D82 3.5): every slice and the key-provider header the same, the
+        # resolved dependency set the same, and every other file the same but the Info.plist files,
+        # which carry the build machine's macOS build. It fails otherwise, and the release, which
+        # needs this job, doesn't run. COMPARE carries the verdict and both builds' hashes.
         run: |
-          for i in 1 2; do grep -E '^(ZIP_SHA256|BINARY_SHA256|HEADER_SHA256|RESOLVED_SHA256)' "build-$i/out/BUILD-RECORD" > "$i.txt"; done
-          echo "Files that differ between the two builds:"
-          diff build-1/out/MANIFEST.sha256 build-2/out/MANIFEST.sha256 | tee -a "$GITHUB_STEP_SUMMARY" || true
-          if diff -u 1.txt 2.txt; then
-            verdict="REPRODUCIBLE: both builds have the same zip, slices, header and resolved dependencies"
-          else
-            verdict="NOT REPRODUCIBLE: the builds differ (below)"
-          fi
-          echo "$verdict" | tee -a "$GITHUB_STEP_SUMMARY"
           mkdir -p compare
-          {
-            echo "$verdict"
-            echo "RUN=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-            for i in 1 2; do echo "# build $i"; cat "$i.txt"; done
-            echo "# MANIFEST.sha256 lines that differ"
-            diff build-1/out/MANIFEST.sha256 build-2/out/MANIFEST.sha256 || true
-          } > compare/COMPARE
-          cat compare/COMPARE
+          set +e
+          tag/scripts/compare-builds.sh build-1 build-2 compare/COMPARE
+          status=$?
+          set -e
+          head -1 compare/COMPARE >> "$GITHUB_STEP_SUMMARY"
+          exit $status
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        # Kept when the builds differ too, so the verdict and its diffs can be read.
+        if: always()
         with:
           name: compare
           path: compare
@@ -137,7 +148,8 @@ jobs:
   release:
     name: Publish the release
     if: startsWith(github.ref, 'refs/tags/build-')
-    needs: [build, compare]
+    # Only reproducible builds are published (SEC WEBRTC-03): compare fails otherwise.
+    needs: [build, compare, compare-gate]
     runs-on: ubuntu-latest
     permissions:
       contents: write
